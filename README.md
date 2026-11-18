@@ -22,7 +22,7 @@ Ketahanan pangan Indonesia memiliki ketergantungan asimetris terhadap dinamika e
 
 ## 2. Gagasan & Arsitektur Solusi: FoodPulse
 
-**FoodPulse** dirancang sebagai platform intelijen pangan generasi baru yang mentransformasi pemantauan sembako menjadi **Sistem Deteksi Dini & Kewaspadaan Dini (*Early Warning System*)** berskala *enterprise*.
+**FoodPulse** dirancang sebagai platform intelijen pangan generasi baru yang mentransformasi pemantauan komoditas pangan pokok menjadi **Sistem Deteksi Dini & Kewaspadaan Dini (*Early Warning System*)** berskala *enterprise*.
 
 Platform ini mengintegrasikan **Distributed Lambda Architecture** dengan **Medallion Data Lakehouse**:
 * **Batch Processing Layer (Deep AI Intelligence):** Menyerap dan memproses data historis 90+ hari melalui zona *Bronze $\rightarrow$ Silver $\rightarrow$ Gold* di Hadoop HDFS. Memanfaatkan **PySpark ML** untuk melatih model regresi multi-variat, mengkalkulasi korelasi transmisi *Dynamic Time-Lag* (0, 7, 14, 21 hari), merumuskan indeks kerentanan pangan (**FPVI 2.0**), serta mengisolasi anomali pasar menggunakan analisis **Residual Regression ($Z \ge 2.0$)**.
@@ -55,8 +55,8 @@ FoodPulse memantau keranjang 7 komoditas pangan pokok dengan metadata acuan regu
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 1. DATA INGESTION ENGINE
-   ├─► [STREAMING] producer_kurs.py    ──► Live Global Spot USD/IDR & Brent Oil ──► Kafka: kurs-stream
-   ├─► [STREAMING] producers_pangan.py ──► API Badan Pangan Nasional (Bapanas)  ──► Kafka: sembako-stream
+   ├─► [STREAMING] producer_kurs.py    ──► Live Global Spot USD/IDR & Brent Oil ──► Kafka: kurs-usd-idr
+   ├─► [STREAMING] producers_pangan.py ──► API Badan Pangan Nasional (Bapanas)  ──► Kafka: harga-pangan
    └─► [BATCH HIST] fetch_*.py         ──► 90-Hari Historis BI, Bapanas, EIA, BPS ──► Direct to HDFS Bronze
 
 2. SPEED LAYER (Low-Latency Processing & Alerting)

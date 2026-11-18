@@ -235,7 +235,7 @@ def run_residual_anomaly_detection(kurs_sorted, pangan_by_kom):
                     sebab = "Lonjakan harga ekstrem di luar pengaruh makro (Indikasi Penimbunan / Kartel Pasar)"
                 elif z >= 1.8:
                     severity = "MEDIUM"
-                    sebab = "Penyimpangan signifikan di atas tren makro (Indikasi Gangguan Distribusi Lokal)"
+                    sebab = "Penyimpangan signifikan di atas tren makro (Indikasi Gangguan Distribusi / Pasokan Sentra Nasional)"
                 else:
                     severity = "LOW"
                     sebab = "Anomali penurunan harga tajam di bawah ekspektasi makro (Panen Raya / Banjir Pasokan)"

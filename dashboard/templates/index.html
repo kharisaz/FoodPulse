@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FoodPulse — Macro-to-Micro Food Security Intelligence</title>
   <meta name="description" content="Dashboard analitik Big Data & AI untuk pemantauan dampak kurs USD terhadap harga pangan Indonesia secara real-time." />
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2.5" />
+  <script>
+    (function() {
+      try {
+        const saved = localStorage.getItem('foodpulse-theme');
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 
@@ -33,9 +41,16 @@
         </div>
 
         <div class="live-clock" id="liveClock">--:--:-- WIB</div>
-        <div class="refresh-indicator">
+        <div class="refresh-indicator" id="refreshIndicator" title="Klik untuk mengubah interval auto-refresh">
           <div class="refresh-dot"></div>
-          <span id="refreshCountdown">30</span>s
+          <span id="refreshCountdown">30</span><span id="refreshUnit">s</span>
+          <select id="selectRefreshInterval" class="refresh-select" aria-label="Pilih Interval Auto Refresh">
+            <option value="10">10s (Cepat)</option>
+            <option value="30" selected>30s (Default)</option>
+            <option value="60">1m (1 Menit)</option>
+            <option value="300">5m (5 Menit)</option>
+            <option value="0">Jeda (Pause ⏸)</option>
+          </select>
         </div>
         <button id="themeToggle" class="theme-toggle" aria-label="Toggle Light/Dark Mode">
           <span class="icon-sun">☀️</span>
@@ -99,7 +114,25 @@
     <section class="live-data-grid" aria-label="Live data">
       <!-- Kurs Chart -->
       <div class="glass-card chart-container fade-in">
-        <div class="chart-title">Tren Dual-Makro: Kurs USD-IDR &amp; Minyak Mentah Dunia (Brent)</div>
+        <div class="chart-header-row">
+          <div class="chart-title-group">
+            <div class="chart-title">Tren Dual-Makro: Kurs USD-IDR &amp; Minyak Mentah Dunia (Brent)</div>
+            <div class="chart-meta-sub">
+              <span id="kursTimeframeBadge" class="tf-badge">⚡ Live 30s</span>
+              <span id="kursTimeframeDesc" class="tf-desc">Speed Layer (Kafka) · Refresh 30 detik</span>
+            </div>
+          </div>
+          <!-- Stockbit-style Timeframe Selector -->
+          <div class="timeframe-selector" id="kursTimeframeSelector" aria-label="Pilihan Rentang Waktu Kurs">
+            <button class="tf-btn active" data-tf="30s" title="Live Streaming (30 Detik)">30s</button>
+            <button class="tf-btn" data-tf="1m" title="Agregasi per 1 Menit">1m</button>
+            <button class="tf-btn" data-tf="5m" title="Agregasi per 5 Menit">5m</button>
+            <button class="tf-btn" data-tf="1h" title="Per 1 Jam (Intraday 24 Jam)">1h</button>
+            <button class="tf-btn" data-tf="1d" title="Per 1 Hari (30 Hari Terakhir BI & EIA)">1d</button>
+            <button class="tf-btn" data-tf="1w" title="Per 1 Minggu (12 Minggu Terakhir)">1w</button>
+            <button class="tf-btn" data-tf="1mo" title="Per 1 Bulan (Tren Historis Lakehouse)">1mo</button>
+          </div>
+        </div>
         <canvas id="chartKurs"></canvas>
       </div>
 
@@ -230,6 +263,6 @@
 
   <!-- Chart.js 4.x CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=2.5"></script>
 </body>
 </html>

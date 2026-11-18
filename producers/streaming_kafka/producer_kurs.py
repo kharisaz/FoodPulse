@@ -31,15 +31,15 @@ def fetch_live_oil_brent() -> float:
     except Exception:
         pass
 
-    # Baseline pasar Brent riil ($76.2/bbl) jika bursa tutup/limit koneksi
+    # Baseline pasar Brent riil ($92.56/bbl) jika bursa tutup/limit koneksi
     jitter = round(random.uniform(-0.15, 0.15), 2)
-    return round(76.20 + jitter, 2)
+    return round(92.56 + jitter, 2)
 
 
 def fetch_live_macro_data() -> dict:
     """Mengambil kurs USD-IDR dan Minyak Mentah Brent secara real-time"""
     headers = {"User-Agent": "Mozilla/5.0"}
-    rate_idr = 18270.0
+    rate_idr = 18277.0
     source = "Global Spot Market"
 
     try:

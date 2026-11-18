@@ -3,22 +3,22 @@
    Chart.js 4.x · Dark Theme · Auto-refresh 30s
    ============================================================ */
 
-// ── Chart.js Global Defaults ───────────────────────────────────
-Chart.defaults.color = '#334155'; // Light mode default text
-Chart.defaults.borderColor = 'rgba(0,0,0,0.06)'; // Light mode grid
-Chart.defaults.font.family = 'Inter';
-Chart.defaults.font.size = 12;
-Chart.defaults.plugins.legend.labels.usePointStyle = true;
-Chart.defaults.plugins.legend.labels.pointStyleWidth = 10;
-Chart.defaults.plugins.legend.labels.padding = 18;
-Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(255,255,255,0.95)';
-Chart.defaults.plugins.tooltip.titleColor = '#0f172a';
-Chart.defaults.plugins.tooltip.bodyColor = '#334155';
-Chart.defaults.plugins.tooltip.borderColor = 'rgba(0,0,0,0.1)';
-Chart.defaults.plugins.tooltip.borderWidth = 1;
-Chart.defaults.plugins.tooltip.padding = 12;
-Chart.defaults.plugins.tooltip.cornerRadius = 10;
-Chart.defaults.plugins.tooltip.titleFont = { weight: '600' };
+// ── Theme & Color Token Engine ────────────────────────────────
+function getThemeColors() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  return {
+    isLight,
+    textPrimary: isLight ? '#0f172a' : '#f8fafc',    // Crisp white in dark mode, dark navy in light mode
+    textSecondary: isLight ? '#334155' : '#cbd5e1',  // Axis numbers & tick labels
+    textMuted: isLight ? '#64748b' : '#94a3b8',      // Minor subtitles
+    gridColor: isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.07)',
+    cardBg: isLight ? '#ffffff' : '#1a1f3a',
+    tooltipBg: isLight ? 'rgba(255, 255, 255, 0.96)' : 'rgba(15, 23, 42, 0.96)',
+    tooltipBorder: isLight ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.12)',
+    tooltipTitle: isLight ? '#0f172a' : '#f8fafc',
+    tooltipBody: isLight ? '#334155' : '#e2e8f0',
+  };
+}
 
 // ── Color Palette ──────────────────────────────────────────────
 const COLORS = {
@@ -31,6 +31,25 @@ const COLORS = {
   pink: '#ec4899',
   slate: '#94a3b8',
 };
+
+// ── Initialize Chart.js Global Defaults ───────────────────────
+const initialTheme = getThemeColors();
+Chart.defaults.color = initialTheme.textSecondary;
+Chart.defaults.borderColor = initialTheme.gridColor;
+Chart.defaults.font.family = 'Inter';
+Chart.defaults.font.size = 12;
+Chart.defaults.plugins.legend.labels.usePointStyle = true;
+Chart.defaults.plugins.legend.labels.pointStyleWidth = 10;
+Chart.defaults.plugins.legend.labels.padding = 18;
+Chart.defaults.plugins.legend.labels.color = initialTheme.textPrimary;
+Chart.defaults.plugins.tooltip.backgroundColor = initialTheme.tooltipBg;
+Chart.defaults.plugins.tooltip.titleColor = initialTheme.tooltipTitle;
+Chart.defaults.plugins.tooltip.bodyColor = initialTheme.tooltipBody;
+Chart.defaults.plugins.tooltip.borderColor = initialTheme.tooltipBorder;
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 12;
+Chart.defaults.plugins.tooltip.cornerRadius = 10;
+Chart.defaults.plugins.tooltip.titleFont = { weight: '600' };
 
 // ── Helpers ────────────────────────────────────────────────────
 /** Format number as Indonesian Rupiah: Rp 15.000 */
@@ -113,8 +132,89 @@ let chartMonthly = null;
 let chartForecast = null;
 let chartCorrelation = null;
 
-// ── Clock & Countdown ──────────────────────────────────────────
+/** Synchronize all Chart.js instances with current theme (Light/Dark) */
+function applyThemeToCharts() {
+  const t = getThemeColors();
+
+  // 1. Chart.js global defaults
+  Chart.defaults.color = t.textSecondary;
+  Chart.defaults.borderColor = t.gridColor;
+  if (Chart.defaults.plugins && Chart.defaults.plugins.legend && Chart.defaults.plugins.legend.labels) {
+    Chart.defaults.plugins.legend.labels.color = t.textPrimary;
+  }
+  if (Chart.defaults.plugins && Chart.defaults.plugins.tooltip) {
+    Chart.defaults.plugins.tooltip.backgroundColor = t.tooltipBg;
+    Chart.defaults.plugins.tooltip.borderColor = t.tooltipBorder;
+    Chart.defaults.plugins.tooltip.titleColor = t.tooltipTitle;
+    Chart.defaults.plugins.tooltip.bodyColor = t.tooltipBody;
+  }
+
+  // 2. chartKurs
+  if (chartKurs) {
+    if (chartKurs.options.plugins?.legend?.labels) {
+      chartKurs.options.plugins.legend.labels.color = t.textPrimary;
+    }
+    if (chartKurs.options.scales?.x?.ticks) {
+      chartKurs.options.scales.x.ticks.color = t.textSecondary;
+    }
+    if (chartKurs.options.scales?.y) {
+      chartKurs.options.scales.y.grid.color = t.gridColor;
+      if (chartKurs.options.scales.y.ticks) chartKurs.options.scales.y.ticks.color = COLORS.cyan;
+    }
+    if (chartKurs.options.scales?.y1?.ticks) {
+      chartKurs.options.scales.y1.ticks.color = '#f59e0b';
+    }
+    chartKurs.update('none');
+  }
+
+  // 3. chartMonthly
+  if (chartMonthly) {
+    if (chartMonthly.options.plugins?.legend?.labels) {
+      chartMonthly.options.plugins.legend.labels.color = t.textPrimary;
+    }
+    if (chartMonthly.options.scales?.x?.ticks) {
+      chartMonthly.options.scales.x.ticks.color = t.textSecondary;
+    }
+    if (chartMonthly.options.scales?.yKurs) {
+      chartMonthly.options.scales.yKurs.grid.color = t.gridColor;
+      if (chartMonthly.options.scales.yKurs.ticks) chartMonthly.options.scales.yKurs.ticks.color = COLORS.cyan;
+      if (chartMonthly.options.scales.yKurs.title) chartMonthly.options.scales.yKurs.title.color = COLORS.cyan;
+    }
+    if (chartMonthly.options.scales?.yPangan) {
+      if (chartMonthly.options.scales.yPangan.ticks) chartMonthly.options.scales.yPangan.ticks.color = COLORS.purple;
+      if (chartMonthly.options.scales.yPangan.title) chartMonthly.options.scales.yPangan.title.color = COLORS.purple;
+    }
+    chartMonthly.update('none');
+  }
+
+  // 4. chartCorrelation
+  if (chartCorrelation) {
+    if (chartCorrelation.options.plugins?.legend?.labels) {
+      chartCorrelation.options.plugins.legend.labels.color = t.textPrimary;
+      chartCorrelation.options.plugins.legend.labels.font = { size: 12, weight: '600' };
+    }
+    if (chartCorrelation.options.scales?.x) {
+      chartCorrelation.options.scales.x.grid.color = t.gridColor;
+      if (chartCorrelation.options.scales.x.ticks) {
+        chartCorrelation.options.scales.x.ticks.color = t.textSecondary;
+      }
+      if (chartCorrelation.options.scales.x.title) {
+        chartCorrelation.options.scales.x.title.color = t.textPrimary;
+      }
+    }
+    if (chartCorrelation.options.scales?.y?.ticks) {
+      chartCorrelation.options.scales.y.ticks.color = t.textPrimary; // Ultra-crisp commodity labels!
+      chartCorrelation.options.scales.y.ticks.font = { size: 12, weight: '600' };
+    }
+    chartCorrelation.update('none');
+  }
+}
+
+// ── State: Kurs Timeframe & Auto-Refresh ───────────────────────
+let currentKursTimeframe = '30s';
+let refreshIntervalSeconds = 30;
 let refreshCountdown = 30;
+let autoRefreshTimer = null;
 
 function updateClock() {
   const now = new Date();
@@ -126,22 +226,40 @@ function updateClock() {
 }
 
 function tickCountdown() {
+  if (refreshIntervalSeconds === 0) return; // Paused
+
   refreshCountdown--;
-  if (refreshCountdown < 0) refreshCountdown = 30;
+  if (refreshCountdown < 0) {
+    refreshCountdown = refreshIntervalSeconds;
+  }
   const el = document.getElementById('refreshCountdown');
   if (el) el.textContent = refreshCountdown;
 }
 
 // ── Data Loaders ───────────────────────────────────────────────
 
-/* ── Section 1 + 2: Live Kurs ─────────────────────────── */
-async function loadKurs() {
-  const data = await safeFetch('/api/kurs');
+/* ── Section 1 + 2: Live Kurs & Multi-Timeframe ───────────────── */
+async function loadKurs(tf = null) {
+  if (tf) currentKursTimeframe = tf;
+
+  const data = await safeFetch(`/api/kurs?timeframe=${encodeURIComponent(currentKursTimeframe)}`);
   if (!data) return;
 
   const history = data.history || (Array.isArray(data) ? data : []);
   const currentVal = data.current_rate || (history.length > 0 ? (history[history.length - 1].rate || history[history.length - 1].kurs_jual) : 0);
   const currentOil = data.current_oil || (history.length > 0 ? history[history.length - 1].oil_price_usd : 76.2);
+
+  // Update Badge & Description di header grafik
+  const badgeEl = document.getElementById('kursTimeframeBadge');
+  const descEl = document.getElementById('kursTimeframeDesc');
+  if (badgeEl) {
+    const isLive = currentKursTimeframe === '30s';
+    badgeEl.textContent = isLive ? '⚡ Live 30s' : currentKursTimeframe.toUpperCase();
+    badgeEl.className = isLive ? 'tf-badge live' : 'tf-badge';
+  }
+  if (descEl) {
+    descEl.textContent = `${data.resolution_label || currentKursTimeframe} · Sumber: ${data.source || 'Speed Layer'}`;
+  }
 
   // 1. Update Kartu Kurs USD-IDR
   animateNumber(document.getElementById('metricKurs'), currentVal, (v) => fmt(v, 'Rp '));
@@ -160,7 +278,7 @@ async function loadKurs() {
     }
   }
 
-  // 2. Update Kartu Minyak Mentah Brent (Dipisahkan Mandiri)
+  // 2. Update Kartu Minyak Mentah Brent
   const oilEl = document.getElementById('metricOil');
   if (oilEl && currentOil) {
     animateNumber(oilEl, currentOil, (v) => `$${Number(v).toFixed(2)}/bbl`);
@@ -189,20 +307,48 @@ async function loadKurs() {
     const labels = history.map(d => d.date || d.tanggal || '');
     const values = history.map(d => d.rate || d.kurs_jual || d.value);
     const oilValues = history.map(d => d.oil_price_usd !== undefined && d.oil_price_usd !== null ? d.oil_price_usd : 76.2);
-    renderKursChart(labels, values, oilValues);
+    renderKursChart(labels, values, oilValues, currentKursTimeframe);
   }
 }
 
-function renderKursChart(labels, values, oilValues) {
+function renderKursChart(labels, values, oilValues, timeframe) {
   const ctx = document.getElementById('chartKurs');
   if (!ctx) return;
 
+  const t = getThemeColors();
   const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 320);
   gradient.addColorStop(0, hexAlpha(COLORS.cyan, 0.25));
   gradient.addColorStop(1, hexAlpha(COLORS.cyan, 0.01));
 
-  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  const gridColor = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)';
+  // Natural formatting untuk label sumbu X berdasarkan timeframe Stockbit
+  const formattedLabels = labels.map(l => {
+    if (typeof l !== 'string') return String(l);
+    if (l.includes(' ') && l.length >= 19) {
+      return l.split(' ')[1]; // "HH:MM:SS"
+    }
+    if (l.includes(' ') && l.length >= 16) {
+      return l.split(' ')[1]; // "HH:MM"
+    }
+    if (l.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const parts = l.split('-');
+      const mNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+      return `${parseInt(parts[2])} ${mNames[parseInt(parts[1]) - 1]}`;
+    }
+    return l;
+  });
+
+  // Calculate sensible visual bounds so micro-ticks don't overmagnify into artificial cliffs
+  const validRates = values.filter(v => v !== null && !isNaN(v));
+  const minRate = validRates.length > 0 ? Math.min(...validRates) : 18000;
+  const maxRate = validRates.length > 0 ? Math.max(...validRates) : 18300;
+  const rateSpan = maxRate - minRate;
+  const ratePadding = rateSpan < 30 ? (30 - rateSpan) / 2 : rateSpan * 0.12;
+
+  const validOils = (oilValues || []).filter(v => v !== null && !isNaN(v));
+  const minOil = validOils.length > 0 ? Math.min(...validOils) : 80;
+  const maxOil = validOils.length > 0 ? Math.max(...validOils) : 95;
+  const oilSpan = maxOil - minOil;
+  const oilPadding = oilSpan < 1.5 ? (1.5 - oilSpan) / 2 : oilSpan * 0.12;
 
   const datasets = [
     {
@@ -210,17 +356,17 @@ function renderKursChart(labels, values, oilValues) {
       data: values,
       borderColor: COLORS.cyan,
       backgroundColor: gradient,
-      borderWidth: 2.5,
+      borderWidth: 2.2,
       fill: true,
-      tension: 0.35,
-      pointRadius: 0,
+      tension: 0.15, // Smooth natural financial spline without artificial overshoot
+      pointRadius: values.length > 35 ? 1 : 2.5,
       pointHoverRadius: 5,
       pointHoverBackgroundColor: COLORS.cyan,
       yAxisID: 'y',
     }
   ];
 
-  if (oilValues && oilValues.some(v => v !== null)) {
+  if (validOils.length > 0) {
     datasets.push({
       label: 'Brent Crude Oil ($/BBL)',
       data: oilValues,
@@ -228,8 +374,8 @@ function renderKursChart(labels, values, oilValues) {
       borderWidth: 2,
       borderDash: [4, 4],
       fill: false,
-      tension: 0.35,
-      pointRadius: 0,
+      tension: 0.15,
+      pointRadius: oilValues.length > 35 ? 1 : 2.5,
       pointHoverRadius: 5,
       pointHoverBackgroundColor: '#f59e0b',
       yAxisID: 'y1',
@@ -239,7 +385,7 @@ function renderKursChart(labels, values, oilValues) {
   const config = {
     type: 'line',
     data: {
-      labels: labels.map(l => l.length > 10 ? l.slice(5) : l),
+      labels: formattedLabels,
       datasets: datasets,
     },
     options: {
@@ -255,12 +401,22 @@ function renderKursChart(labels, values, oilValues) {
           position: 'top',
           labels: {
             boxWidth: 12,
-            font: { size: 11 },
-            color: isLight ? '#475569' : '#94a3b8'
+            font: { size: 11, weight: '600' },
+            color: t.textPrimary
           }
         },
         tooltip: {
+          backgroundColor: t.tooltipBg,
+          borderColor: t.tooltipBorder,
+          borderWidth: 1,
+          titleColor: t.tooltipTitle,
+          bodyColor: t.tooltipBody,
           callbacks: {
+            title: (items) => {
+              if (!items || items.length === 0) return '';
+              const idx = items[0].dataIndex;
+              return labels[idx] || items[0].label;
+            },
             label: (tip) => {
               if (tip.dataset.yAxisID === 'y1') {
                 return ` Brent Oil: $${Number(tip.raw).toFixed(2)}/BBL`;
@@ -271,18 +427,25 @@ function renderKursChart(labels, values, oilValues) {
         },
       },
       scales: {
-        x: { grid: { display: false }, ticks: { maxTicksLimit: 8, font: { size: 11 } } },
+        x: {
+          grid: { display: false },
+          ticks: { maxTicksLimit: 10, font: { size: 11 }, color: t.textSecondary }
+        },
         y: {
           type: 'linear',
           position: 'left',
-          grid: { color: gridColor },
-          ticks: { callback: v => fmt(v) }
+          suggestedMin: Math.floor(minRate - ratePadding),
+          suggestedMax: Math.ceil(maxRate + ratePadding),
+          grid: { color: t.gridColor },
+          ticks: { callback: v => fmt(v), color: COLORS.cyan, font: { weight: '500' } }
         },
         y1: {
           type: 'linear',
           position: 'right',
+          suggestedMin: Math.floor((minOil - oilPadding) * 10) / 10,
+          suggestedMax: Math.ceil((maxOil + oilPadding) * 10) / 10,
           grid: { drawOnChartArea: false },
-          ticks: { callback: v => `$${v}` }
+          ticks: { callback: v => `$${Number(v).toFixed(2)}`, color: '#f59e0b', font: { weight: '500' } }
         }
       },
     },
@@ -496,6 +659,7 @@ async function loadMonthlyTrends() {
     }
   }
 
+  const t = getThemeColors();
   const config = {
     type: 'line',
     data: { labels, datasets },
@@ -503,20 +667,40 @@ async function loadMonthlyTrends() {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { position: 'top' } },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            boxWidth: 10,
+            padding: 14,
+            font: { size: 11, weight: '500' },
+            color: t.textPrimary
+          }
+        },
+        tooltip: {
+          backgroundColor: t.tooltipBg,
+          borderColor: t.tooltipBorder,
+          borderWidth: 1,
+          titleColor: t.tooltipTitle,
+          bodyColor: t.tooltipBody,
+        }
+      },
       scales: {
-        x: { grid: { display: false }, ticks: { maxTicksLimit: 12, font: { size: 11 } } },
+        x: {
+          grid: { display: false },
+          ticks: { maxTicksLimit: 12, font: { size: 11 }, color: t.textSecondary }
+        },
         yKurs: {
           type: 'linear',
           position: 'left',
-          title: { display: true, text: 'Kurs (IDR)', color: COLORS.cyan },
-          grid: { color: document.documentElement.getAttribute('data-theme') === 'light' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)' },
+          title: { display: true, text: 'Kurs (IDR)', color: COLORS.cyan, font: { weight: '600' } },
+          grid: { color: t.gridColor },
           ticks: { callback: v => fmt(v), color: COLORS.cyan },
         },
         yPangan: {
           type: 'linear',
           position: 'right',
-          title: { display: true, text: 'Harga (IDR)', color: COLORS.purple },
+          title: { display: true, text: 'Harga (IDR)', color: COLORS.purple, font: { weight: '600' } },
           grid: { drawOnChartArea: false },
           ticks: { callback: v => fmt(v), color: COLORS.purple },
         },
@@ -524,8 +708,13 @@ async function loadMonthlyTrends() {
     },
   };
 
-  if (chartMonthly) { chartMonthly.data = config.data; chartMonthly.update('none'); }
-  else { chartMonthly = new Chart(ctx, config); }
+  if (chartMonthly) {
+    chartMonthly.data = config.data;
+    chartMonthly.options = config.options;
+    chartMonthly.update('none');
+  } else {
+    chartMonthly = new Chart(ctx, config);
+  }
 }
 
 /* ── Section 4: ML Forecasting ────────────────────────── */
@@ -755,6 +944,7 @@ async function loadCorrelation() {
   const corrKurs = items.map(d => d.pearson_corr_kurs ?? d.pearson_corr ?? d.corr_kurs ?? 0);
   const corrOil = items.map(d => d.pearson_corr_oil ?? d.corr_oil ?? 0);
 
+  const t = getThemeColors();
   const config = {
     type: 'bar',
     data: {
@@ -763,18 +953,18 @@ async function loadCorrelation() {
         {
           label: 'vs Kurs USD',
           data: corrKurs,
-          backgroundColor: hexAlpha(COLORS.cyan, 0.7),
+          backgroundColor: hexAlpha(COLORS.cyan, 0.75),
           borderColor: COLORS.cyan,
-          borderWidth: 1,
+          borderWidth: 1.5,
           borderRadius: 6,
           barPercentage: 0.55,
         },
         {
           label: 'vs Oil Price',
           data: corrOil,
-          backgroundColor: hexAlpha(COLORS.orange, 0.7),
+          backgroundColor: hexAlpha(COLORS.orange, 0.75),
           borderColor: COLORS.orange,
-          borderWidth: 1,
+          borderWidth: 1.5,
           borderRadius: 6,
           barPercentage: 0.55,
         },
@@ -784,25 +974,64 @@ async function loadCorrelation() {
       indexAxis: 'y',
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { position: 'top' } },
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: {
+            color: t.textPrimary,
+            font: { size: 12, weight: '600' },
+            boxWidth: 12,
+            padding: 18,
+          }
+        },
+        tooltip: {
+          backgroundColor: t.tooltipBg,
+          borderColor: t.tooltipBorder,
+          borderWidth: 1,
+          titleColor: t.tooltipTitle,
+          bodyColor: t.tooltipBody,
+          padding: 12,
+          cornerRadius: 8,
+          callbacks: {
+            label: (ctx) => ` ${ctx.dataset.label}: r = ${fmtDec(ctx.raw, 4)}`
+          }
+        }
+      },
       scales: {
         x: {
           min: -1,
           max: 1,
-          grid: { color: document.documentElement.getAttribute('data-theme') === 'light' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)' },
-          ticks: { callback: v => v.toFixed(1) },
-          title: { display: true, text: 'Pearson r', color: COLORS.slate },
+          grid: { color: t.gridColor },
+          ticks: {
+            callback: v => v.toFixed(1),
+            color: t.textSecondary,
+            font: { size: 11, weight: '500' }
+          },
+          title: {
+            display: true,
+            text: 'Koefisien Korelasi Pearson (r)',
+            color: t.textPrimary,
+            font: { size: 12, weight: '600' }
+          },
         },
         y: {
           grid: { display: false },
-          ticks: { font: { size: 12 } },
+          ticks: {
+            color: t.textPrimary,
+            font: { size: 12, weight: '600' }
+          },
         },
       },
     },
   };
 
-  if (chartCorrelation) { chartCorrelation.data = config.data; chartCorrelation.update('none'); }
-  else { chartCorrelation = new Chart(ctx, config); }
+  if (chartCorrelation) {
+    chartCorrelation.data = config.data;
+    chartCorrelation.options = config.options;
+    chartCorrelation.update('none');
+  } else {
+    chartCorrelation = new Chart(ctx, config);
+  }
 }
 
 /* ── Section 8: FPVI Analytics Table ──────────────────── */
@@ -885,9 +1114,64 @@ async function loadPipelineHealth() {
   }
 }
 
+// ── Stockbit-style Timeframe Selector Controller ──────────────
+function initTimeframeButtons() {
+  const container = document.getElementById('kursTimeframeSelector');
+  if (!container) return;
+
+  const buttons = container.querySelectorAll('.tf-btn');
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tf = btn.dataset.tf;
+      if (!tf || tf === currentKursTimeframe) return;
+
+      buttons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      loadKurs(tf);
+    });
+  });
+}
+
+// ── Dynamic Auto-Refresh Speed Controller ──────────────────────
+function initRefreshSelector() {
+  const select = document.getElementById('selectRefreshInterval');
+  const unitEl = document.getElementById('refreshUnit');
+  const countdownEl = document.getElementById('refreshCountdown');
+  if (!select) return;
+
+  select.addEventListener('change', (e) => {
+    const val = parseInt(e.target.value);
+    if (isNaN(val)) return;
+
+    if (val === 0) {
+      // Pause Auto Refresh
+      refreshIntervalSeconds = 0;
+      refreshCountdown = 0;
+      if (countdownEl) countdownEl.textContent = '⏸️';
+      if (unitEl) unitEl.textContent = ' Jeda';
+      if (autoRefreshTimer) {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+      }
+    } else {
+      // Set new active interval
+      refreshIntervalSeconds = val;
+      refreshCountdown = val;
+      if (unitEl) unitEl.textContent = 's';
+      if (countdownEl) countdownEl.textContent = refreshCountdown;
+
+      if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+      autoRefreshTimer = setInterval(refreshAll, refreshIntervalSeconds * 1000);
+    }
+  });
+}
+
 // ── Master Refresh ─────────────────────────────────────────────
 async function refreshAll() {
-  refreshCountdown = 30;
+  if (refreshIntervalSeconds > 0) {
+    refreshCountdown = refreshIntervalSeconds;
+  }
   await Promise.allSettled([
     loadLiveAlerts(),
     loadPipelineHealth(),
@@ -908,35 +1192,33 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(updateClock, 1000);
   setInterval(tickCountdown, 1000);
 
-  // Theme Toggle Logic
+  // Initialize Stockbit Timeframe Buttons & Refresh Selector
+  initTimeframeButtons();
+  initRefreshSelector();
+
+  // Theme Toggle Logic with Persistence & Complete Chart Sync
+  try {
+    const savedTheme = localStorage.getItem('foodpulse-theme');
+    if (savedTheme) {
+      document.documentElement.setAttribute('data-theme', savedTheme);
+    }
+  } catch (e) {}
+  applyThemeToCharts();
+
   const themeToggle = document.getElementById('themeToggle');
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
       const root = document.documentElement;
-      const currentTheme = root.getAttribute('data-theme');
+      const currentTheme = root.getAttribute('data-theme') || 'light';
       const newTheme = currentTheme === 'light' ? 'dark' : 'light';
       root.setAttribute('data-theme', newTheme);
-
-      // Update Chart Colors
-      const textColor = newTheme === 'light' ? '#334155' : '#94a3b8';
-      const gridColor = newTheme === 'light' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)';
-
-      Chart.defaults.color = textColor;
-      if (chartKurs) {
-        chartKurs.options.scales.y.grid.color = gridColor;
-        chartKurs.update('none');
-      }
-      if (chartMonthly) {
-        chartMonthly.options.scales.yKurs.grid.color = gridColor;
-        chartMonthly.update('none');
-      }
-      if (chartCorrelation) {
-        chartCorrelation.options.scales.x.grid.color = gridColor;
-        chartCorrelation.update('none');
-      }
+      try {
+        localStorage.setItem('foodpulse-theme', newTheme);
+      } catch (e) {}
+      applyThemeToCharts();
     });
   }
 
   refreshAll();
-  setInterval(refreshAll, 30000);
+  autoRefreshTimer = setInterval(refreshAll, refreshIntervalSeconds * 1000);
 });

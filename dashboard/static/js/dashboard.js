@@ -143,17 +143,45 @@ async function loadKurs() {
   const currentVal = data.current_rate || (history.length > 0 ? (history[history.length - 1].rate || history[history.length - 1].kurs_jual) : 0);
   const currentOil = data.current_oil || (history.length > 0 ? history[history.length - 1].oil_price_usd : 76.2);
 
+  // 1. Update Kartu Kurs USD-IDR
   animateNumber(document.getElementById('metricKurs'), currentVal, (v) => fmt(v, 'Rp '));
 
-  // Sub text: Tampilkan perubahan Kurs + Live Brent Crude
-  const subEl = document.getElementById('metricKursSub');
-  if (subEl && history.length >= 2) {
-    const prevVal = history[history.length - 2].rate || history[history.length - 2].kurs_jual;
-    const diff = currentVal - prevVal;
-    const arrow = diff >= 0 ? '▲' : '▼';
-    const cls = diff >= 0 ? 'arrow-up' : 'arrow-down';
-    const oilStr = currentOil ? ` • 🛢️ Brent: <b>$${Number(currentOil).toFixed(1)}/bbl</b>` : '';
-    subEl.innerHTML = `<span class="${cls}">${arrow} ${fmt(Math.abs(diff), '')}</span>${oilStr}`;
+  const subKurs = document.getElementById('metricKursSub');
+  if (subKurs) {
+    if (history.length >= 2) {
+      const prevVal = history[history.length - 2].rate || history[history.length - 2].kurs_jual;
+      const diff = currentVal - prevVal;
+      const arrow = diff >= 0 ? '▲' : '▼';
+      const cls = diff >= 0 ? 'arrow-up' : 'arrow-down';
+      const diffText = Math.abs(diff) >= 0.1 ? `${arrow} ${fmt(Math.abs(diff), '')}` : 'stabil';
+      subKurs.innerHTML = `<span class="${cls}">${diffText}</span> • spot interbank`;
+    } else {
+      subKurs.textContent = 'spot valas interbank';
+    }
+  }
+
+  // 2. Update Kartu Minyak Mentah Brent (Dipisahkan Mandiri)
+  const oilEl = document.getElementById('metricOil');
+  if (oilEl && currentOil) {
+    animateNumber(oilEl, currentOil, (v) => `$${Number(v).toFixed(2)}/bbl`);
+  }
+
+  const subOil = document.getElementById('metricOilSub');
+  if (subOil) {
+    if (history.length >= 2) {
+      const prevOil = history[history.length - 2].oil_price_usd;
+      if (prevOil !== undefined && prevOil !== null && currentOil) {
+        const diffOil = currentOil - prevOil;
+        const arrowO = diffOil >= 0 ? '▲' : '▼';
+        const clsO = diffOil >= 0 ? 'arrow-up' : 'arrow-down';
+        const diffTextO = Math.abs(diffOil) >= 0.01 ? `${arrowO} $${Math.abs(diffOil).toFixed(2)}` : 'stabil';
+        subOil.innerHTML = `<span class="${clsO}">${diffTextO}</span> • energi &amp; logistik`;
+      } else {
+        subOil.textContent = 'energi & logistik global';
+      }
+    } else {
+      subOil.textContent = 'energi & logistik global';
+    }
   }
 
   // Dual-Axis Chart
@@ -273,25 +301,38 @@ function renderKursChart(labels, values, oilValues) {
 async function loadLiveAlerts() {
   const data = await safeFetch('/api/live_alerts');
   const container = document.getElementById('liveAlertsContainer');
-  if (!container) return;
+  const statusPill = document.getElementById('streamStatusPill');
+  const statusDot = document.getElementById('streamStatusDot');
+  const statusText = document.getElementById('streamStatusText');
+  const tooltipTitle = document.getElementById('tooltipTitle');
+  const tooltipDesc = document.getElementById('tooltipDesc');
 
-  if (!data || !data.alerts || data.alerts.length === 0) {
-    container.innerHTML = `
-      <div class="glass-card" style="padding: 14px 20px; border-left: 4px solid var(--accent-green); display: flex; align-items: center; justify-content: space-between; border-radius: var(--radius-md);">
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <span style="font-size: 1.3rem;">🟢</span>
-          <div>
-            <div style="font-weight: 600; font-size: 0.95rem; color: var(--text-primary);">Speed Layer Stabil — Tidak Ada Kejutan Pasar Ekstrem</div>
-            <div style="font-size: 0.82rem; color: var(--text-secondary);">Aliran streaming Kafka normal. Tidak ada lonjakan kurs anomali atau pelanggaran HET baru pada aliran streaming saat ini.</div>
-          </div>
-        </div>
-        <span style="font-size: 0.75rem; background: rgba(16,185,129,0.15); color: var(--accent-green); padding: 4px 10px; border-radius: 99px; font-weight: 600; letter-spacing: 0.5px;">STREAM STABLE</span>
-      </div>
-    `;
+  const alerts = data && Array.isArray(data.alerts) ? data.alerts : [];
+
+  // Jika kondisi pasar normal (tidak ada kejutan pasar):
+  if (alerts.length === 0) {
+    if (container) {
+      container.innerHTML = '';
+      container.style.display = 'none';
+    }
+    if (statusPill) statusPill.className = 'stream-status-pill normal';
+    if (statusDot) statusDot.className = 'status-dot green';
+    if (statusText) statusText.textContent = 'Stream Normal';
+    if (tooltipTitle) tooltipTitle.textContent = 'Speed Layer: Optimal';
+    if (tooltipDesc) tooltipDesc.textContent = 'Aliran Kafka (9092) stabil. Tidak ada lonjakan kurs anomali atau pelanggaran HET aktif.';
     return;
   }
 
-  container.innerHTML = data.alerts.map(a => {
+  // Jika ADA kejutan / shock pasar aktif:
+  if (statusPill) statusPill.className = 'stream-status-pill alert';
+  if (statusDot) statusDot.className = 'status-dot red pulse';
+  if (statusText) statusText.textContent = `Alert (${alerts.length})`;
+  if (tooltipTitle) tooltipTitle.textContent = `🚨 ${alerts.length} Peringatan Aktif`;
+  if (tooltipDesc) tooltipDesc.textContent = alerts.map(a => a.title).join(' | ');
+
+  if (!container) return;
+  container.style.display = 'block';
+  container.innerHTML = alerts.map(a => {
     const isDanger = a.type === 'danger';
     const borderColor = isDanger ? 'var(--accent-red)' : 'var(--accent-orange)';
     const badgeBg = isDanger ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
@@ -299,20 +340,20 @@ async function loadLiveAlerts() {
     const icon = isDanger ? '🚨' : '⚠️';
 
     return `
-      <div class="glass-card fade-in" style="padding: 16px 20px; margin-bottom: 12px; border-left: 4px solid ${borderColor}; border-radius: var(--radius-md); box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
-        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
-          <div style="display: flex; align-items: flex-start; gap: 12px; flex: 1;">
-            <span style="font-size: 1.4rem; line-height: 1.2;">${icon}</span>
+      <div class="glass-card fade-in" style="padding: 14px 18px; margin-bottom: 12px; border-left: 4px solid ${borderColor}; border-radius: var(--radius-md); box-shadow: 0 4px 20px rgba(0,0,0,0.12);">
+        <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: flex-start; gap: 10px; flex: 1;">
+            <span style="font-size: 1.3rem; line-height: 1.2;">${icon}</span>
             <div>
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
-                <span style="font-size: 0.72rem; background: ${badgeBg}; color: ${badgeColor}; padding: 3px 8px; border-radius: 6px; font-weight: 700; letter-spacing: 0.5px;">${a.badge}</span>
-                <span style="font-weight: 600; font-size: 0.95rem; color: var(--text-primary);">${a.title}</span>
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px; flex-wrap: wrap;">
+                <span style="font-size: 0.7rem; background: ${badgeBg}; color: ${badgeColor}; padding: 2px 7px; border-radius: 5px; font-weight: 700; letter-spacing: 0.5px;">${a.badge}</span>
+                <span style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary);">${a.title}</span>
               </div>
-              <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px;">${a.message}</div>
-              <div style="font-size: 0.82rem; color: ${borderColor}; font-weight: 500;">💡 <b>Aksi Cepat:</b> ${a.action}</div>
+              <div style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 5px;">${a.message}</div>
+              <div style="font-size: 0.8rem; color: ${borderColor}; font-weight: 500;">💡 <b>Aksi Cepat:</b> ${a.action}</div>
             </div>
           </div>
-          <div style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">${a.timestamp}</div>
+          <div style="font-size: 0.72rem; color: var(--text-muted); white-space: nowrap;">${a.timestamp}</div>
         </div>
       </div>
     `;
@@ -329,7 +370,7 @@ async function loadPangan() {
 
   const items = data.items || (Array.isArray(data) ? data : []);
   if (items.length === 0) {
-    container.innerHTML = '<div class="glass-card price-card empty-state">Belum ada data harga</div>';
+    container.innerHTML = '<div class="empty-state" style="padding: 24px; text-align: center; color: var(--text-muted); font-size: 0.85rem;">Belum ada aliran data harga pangan</div>';
     return;
   }
 
@@ -357,16 +398,29 @@ async function loadPangan() {
     const changeDir = change > 0 ? 'up' : change < 0 ? 'down' : 'flat';
     const changeArrow = change > 0 ? '▲' : change < 0 ? '▼' : '—';
     const date = item.tanggal || item.date || '';
+    const timeStr = date.includes(' ') ? date.split(' ')[1] : date;
+    const kategori = item.kategori || 'Pangan Pokok';
+
+    let catClass = 'badge-cat';
+    const catLower = kategori.toLowerCase();
+    if (catLower.includes('impor')) catClass += ' cat-impor';
+    else if (catLower.includes('volatile') || catLower.includes('lokal')) catClass += ' cat-volatile';
+    else if (catLower.includes('pokok') || catLower.includes('het')) catClass += ' cat-pokok';
 
     return `
-      <div class="glass-card price-card fade-in">
-        <div>
-          <div class="komoditas-name">${name}</div>
-          <div class="komoditas-meta">${date}</div>
+      <div class="price-item-row fade-in">
+        <div class="item-info">
+          <div class="item-name">${name}</div>
+          <div class="item-sub">
+            <span class="${catClass}">${kategori}</span>
+            <span class="item-time">⏱️ ${timeStr}</span>
+          </div>
         </div>
-        <div>
-          <div class="price-value text-cyan">${fmt(price)}</div>
-          ${change !== 0 ? `<div class="price-change ${changeDir}">${changeArrow} ${fmtDec(Math.abs(change), 2)}%</div>` : ''}
+        <div class="item-pricing">
+          <div class="item-val">${fmt(price)}</div>
+          <div class="item-badge-wrap">
+            <span class="badge-change ${changeDir}">${change !== 0 ? `${changeArrow} ${fmtDec(Math.abs(change), 2)}%` : 'stabil'}</span>
+          </div>
         </div>
       </div>`;
   }).join('');
@@ -479,33 +533,76 @@ async function loadForecast() {
   const data = await safeFetch('/api/forecast');
   if (!data) return;
 
-  // Prediction cards
   const predEl = document.getElementById('predictionCards');
   if (predEl && data.forecasts) {
     const preds = Array.isArray(data.forecasts) ? data.forecasts : [];
     if (preds.length === 0) {
-      predEl.innerHTML = '<div class="glass-card prediction-card empty-state">Tidak ada data prediksi</div>';
+      predEl.innerHTML = '<div class="glass-card forecast-natural-card empty-state">Tidak ada data prediksi tersedia</div>';
       return;
     }
-    predEl.innerHTML = preds.map(p => {
-      const weeks = p.predictions || [];
-      const weekBadges = weeks.map((w) =>
-        `<span class="pred-week-badge">W${w.week}: ${fmt(w.predicted_price)}</span>`
-      ).join('');
 
-      const lastWeekPrice = weeks.length > 0 ? weeks[weeks.length - 1].predicted_price : 0;
+    predEl.innerHTML = preds.map(p => {
+      const name = p.komoditas || p.nama || '—';
+      const weeks = p.predictions || [];
+      const currentPrice = p.current_price || (weeks.length > 0 ? weeks[0].predicted_price : 0);
+      const w4 = weeks.length >= 4 ? weeks[3] : (weeks[weeks.length - 1] || { predicted_price: currentPrice });
+      const targetPrice = w4.predicted_price;
+      const delta = targetPrice - currentPrice;
+      const deltaPct = currentPrice > 0 ? ((delta / currentPrice) * 100) : 0;
+
+      // Natural Trend Badge
+      let trendBadge = '';
+      if (Math.abs(deltaPct) < 0.15) {
+        trendBadge = `<span class="trend-badge flat">● Stabil</span>`;
+      } else if (deltaPct > 0) {
+        trendBadge = `<span class="trend-badge up">▲ +${fmtDec(deltaPct, 1)}%</span>`;
+      } else {
+        trendBadge = `<span class="trend-badge down">▼ -${fmtDec(Math.abs(deltaPct), 1)}%</span>`;
+      }
+
+      // Natural descriptive note
+      let changeNote = '';
+      if (Math.abs(delta) < 20) {
+        changeNote = `Cenderung stabil (selisih ${fmt(Math.abs(delta))}) dalam 4 minggu ke depan.`;
+      } else if (delta > 0) {
+        changeNote = `Diproyeksikan naik +${fmt(delta)} dalam 4 minggu ke depan.`;
+      } else {
+        changeNote = `Diproyeksikan turun -${fmt(Math.abs(delta))} dalam 4 minggu ke depan.`;
+      }
+
+      // Minimalist weekly progression: horizontal flow
+      const timelineHtml = weeks.map((w, idx) => {
+        const isFinal = idx === weeks.length - 1;
+        return `
+          <div class="weekly-dot-step ${isFinal ? 'target-step' : ''}">
+            <span class="dot-label">M${w.week}</span>
+            <span class="dot-price">${fmt(w.predicted_price)}</span>
+          </div>`;
+      }).join('<span class="weekly-connector">›</span>');
 
       return `
-       <div class="glass-card prediction-card fade-in">
-  <div class="pred-komoditas">${p.komoditas || p.nama || '—'}</div>
-  <div class="pred-price">${fmt(lastWeekPrice)}</div>
-  <div class="pred-label">Prediksi harga 4 minggu ke depan</div>
-  <div style="font-size:0.75rem; color:var(--text-muted); margin: 6px 0 8px; display:flex; justify-content:space-between;">
-    <span>PySpark R²: <b style="color:var(--accent-green);">${p.r2_score ?? '—'}</b></span>
-    <span>RMSE: <b>${p.rmse ?? '—'}</b></span>
-  </div>
-  ${weekBadges ? `<div class="pred-weeks" style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">${weekBadges}</div>` : ''}
-</div>`;
+        <div class="glass-card forecast-natural-card fade-in">
+          <div class="card-head-simple">
+            <div class="card-title-simple">${name}</div>
+            ${trendBadge}
+          </div>
+
+          <div class="forecast-hero-price">
+            <span class="hero-val">${fmt(targetPrice)}</span>
+            <span class="hero-basis">Basis: ${fmt(currentPrice)}</span>
+          </div>
+
+          <div class="forecast-note-simple">${changeNote}</div>
+
+          <div class="weekly-strip-wrap">
+            ${timelineHtml}
+          </div>
+
+          <div class="card-footer-meta">
+            <span>PySpark Multi-Variate</span>
+            <span>Akurasi Model R² <b>${p.r2_score ?? '—'}</b></span>
+          </div>
+        </div>`;
     }).join('');
   }
 }
@@ -566,7 +663,7 @@ async function loadHETWarning() {
   // Update metric
   const violations = items.filter(i => {
     const s = (i.status || '').toUpperCase();
-    return s === 'KRITIS' || s === 'DARURAT';
+    return s.includes('KRITIS') || s.includes('DARURAT');
   }).length;
   animateNumber(document.getElementById('metricHET'), violations, (v) => Math.round(v).toString());
   const subEl = document.getElementById('metricHETSub');
@@ -577,36 +674,70 @@ async function loadHETWarning() {
   }
 
   if (items.length === 0) {
-    container.innerHTML = '<div class="glass-card het-card empty-state">Semua harga di bawah HET</div>';
+    container.innerHTML = '<div class="glass-card het-natural-card empty-state">Semua harga di bawah HET</div>';
     return;
   }
 
   container.innerHTML = items.map(h => {
-    const status = (h.status || 'AMAN').toUpperCase();
+    const name = h.komoditas || h.nama || '—';
     const pct = h.persen_dari_het || h.pct_of_het || h.percentage || 0;
     const price = h.harga_terakhir || h.harga || h.current_price || 0;
     const het = h.het || h.het_limit || 0;
-    const projected = h.proyeksi_tembus_het || h.projected_breach || h.will_breach;
-    const barClass = status === 'DARURAT' ? 'darurat' : status === 'KRITIS' ? 'kritis' : status === 'WASPADA' ? 'waspada' : 'aman';
-    const barWidth = Math.min(pct, 100);
+    const satuan = h.satuan || 'kg';
+    const projected = h.proyeksi_jebol_het || h.proyeksi_tembus_het || h.projected_breach;
+    const weeksToBreach = h.estimasi_minggu_jebol || h.estimasi_minggu_tembus;
+
+    // Natural status & badge
+    let statusBadge = '';
+    let barColorClass = 'safe';
+    let headroomText = '';
+
+    if (price > het) {
+      const breach = price - het;
+      statusBadge = `<span class="het-pill danger">🚨 Melebihi HET (${fmtDec(pct, 0)}%)</span>`;
+      barColorClass = 'danger';
+      headroomText = `<span class="note-danger">Melampaui batas sebesar <b>${fmt(breach)}/${satuan}</b></span>`;
+    } else if (pct >= 98) {
+      const diff = het - price;
+      statusBadge = `<span class="het-pill warning">⚠️ Kritis (${fmtDec(pct, 1)}%)</span>`;
+      barColorClass = 'warning';
+      headroomText = `<span class="note-warning">Hampir menyentuh batas (sisa ${fmt(diff)}/${satuan})</span>`;
+    } else if (pct >= 90) {
+      const diff = het - price;
+      statusBadge = `<span class="het-pill watch">Waspada (${fmtDec(pct, 1)}%)</span>`;
+      barColorClass = 'watch';
+      headroomText = `<span class="note-watch">Sisa batas aman: <b>${fmt(diff)}/${satuan}</b></span>`;
+    } else {
+      const diff = het - price;
+      statusBadge = `<span class="het-pill safe">Aman (${fmtDec(pct, 1)}%)</span>`;
+      barColorClass = 'safe';
+      headroomText = `<span class="note-safe">Sisa batas aman: <b>${fmt(diff)}/${satuan}</b></span>`;
+    }
+
+    const barWidth = Math.min(Math.max(pct, 0), 100);
 
     return `
-      <div class="glass-card het-card fade-in">
-        <div class="het-komoditas">${h.komoditas || h.nama || '—'}</div>
-        <div class="het-progress-wrap">
-          <div class="het-bar-bg">
-            <div class="het-bar-fill ${barClass}" style="width:${barWidth}%"></div>
-          </div>
-          <div class="het-labels">
-            <span>Harga: ${fmt(price)}</span>
-            <span>HET: ${fmt(het)}</span>
+      <div class="glass-card het-natural-card fade-in">
+        <div class="card-head-simple">
+          <div class="card-title-simple">${name}</div>
+          ${statusBadge}
+        </div>
+
+        <div class="het-price-row">
+          <span class="het-curr-val">${fmt(price)}</span>
+          <span class="het-ceiling-val">Pagu HET: ${fmt(het)}/${satuan}</span>
+        </div>
+
+        <div class="het-progress-simple">
+          <div class="het-bar-thin">
+            <div class="het-bar-fill-simple ${barColorClass}" style="width: ${barWidth}%;"></div>
           </div>
         </div>
-        <div class="het-status-row">
-          <span class="status-badge ${status}">${status}</span>
-          <span class="text-muted" style="font-size:0.78rem">${fmtDec(pct, 1)}% dari HET</span>
+
+        <div class="het-headroom-simple">
+          ${headroomText}
+          ${projected && weeksToBreach ? `<span class="het-breach-alert">⚠️ Risiko tembus ${weeksToBreach} mgg</span>` : ''}
         </div>
-        ${projected ? `<div class="het-projected">Proyeksi menembus HET dalam ${h.estimasi_minggu_tembus} minggu</div>` : ''}
       </div>`;
   }).join('');
 }
@@ -729,49 +860,28 @@ async function loadAnalytics() {
   });
 }
 
-/* ── Telemetry: Live Cluster Health ───────────────────── */
+/* ── Telemetry: Live Cluster Health (Formal & Unified) ── */
 async function loadPipelineHealth() {
   const data = await safeFetch('/api/pipeline_health');
   if (!data) return;
 
-  // 1. Kafka Broker
-  const valKafka = document.getElementById('valKafka');
-  const dotKafka = document.getElementById('dotKafka');
-  if (valKafka && dotKafka) {
-    const isUp = data.kafka?.status === 'UP';
-    valKafka.textContent = isUp ? 'Online (:9092)' : 'Offline';
-    valKafka.style.color = isUp ? 'var(--accent-green)' : 'var(--accent-red)';
-    dotKafka.style.background = isUp ? 'var(--accent-green)' : 'var(--accent-red)';
-  }
+  const valStatus = document.getElementById('valSystemStatus');
+  const dotStatus = document.getElementById('dotSystemStatus');
 
-  // 2. HDFS Lakehouse
-  const valHdfs = document.getElementById('valHdfs');
-  const dotHdfs = document.getElementById('dotHdfs');
-  if (valHdfs && dotHdfs) {
-    const isUp = data.hdfs?.status === 'UP';
-    valHdfs.textContent = isUp ? 'NameNode Aktif (:9870)' : 'Standby / Storage';
-    valHdfs.style.color = isUp ? 'var(--accent-green)' : 'var(--accent-orange)';
-    dotHdfs.style.background = isUp ? 'var(--accent-green)' : 'var(--accent-orange)';
-  }
+  if (valStatus && dotStatus) {
+    const kafkaUp = data.kafka?.status === 'UP';
+    const hdfsUp = data.hdfs?.status === 'UP';
 
-  // 3. Speed Layer Streaming
-  const valSpeed = document.getElementById('valSpeed');
-  const dotSpeed = document.getElementById('dotSpeed');
-  if (valSpeed && dotSpeed) {
-    const lag = data.speed_layer?.lag || '';
-    valSpeed.textContent = `${data.speed_layer?.status || 'Active'} (${lag})`;
-    valSpeed.style.color = 'var(--accent-cyan)';
-    dotSpeed.style.background = 'var(--accent-cyan)';
-  }
-
-  // 4. PySpark ML Engine
-  const valSpark = document.getElementById('valSpark');
-  const dotSpark = document.getElementById('dotSpark');
-  if (valSpark && dotSpark) {
-    const isReady = data.spark_gold?.status === 'TRAINED & READY';
-    valSpark.textContent = isReady ? 'Model Ready (R² > 0.98)' : 'Pending';
-    valSpark.style.color = isReady ? 'var(--accent-purple)' : 'var(--accent-orange)';
-    dotSpark.style.background = isReady ? 'var(--accent-purple)' : 'var(--accent-orange)';
+    if (kafkaUp && hdfsUp) {
+      valStatus.textContent = 'Klaster & Streaming Operasional';
+      dotStatus.className = 'status-dot green';
+    } else if (kafkaUp || hdfsUp) {
+      valStatus.textContent = 'Klaster Berjalan Sebagian (Degraded)';
+      dotStatus.className = 'status-dot orange';
+    } else {
+      valStatus.textContent = 'Mode Penyajian Lokal (Offline Stream)';
+      dotStatus.className = 'status-dot orange';
+    }
   }
 }
 

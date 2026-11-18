@@ -52,11 +52,15 @@ def seed_real_historical_data(days_back=90):
     for d in range(days_back, -1, -1):
         target_date = (end_date - timedelta(days=d)).strftime("%Y-%m-%d")
 
-        # Dinamika fluktuasi harga realistis (volatilitas harian 0.5% - 1.5%)
-        day_factor = 1.0 + (0.005 * ((d % 7) - 3))
+        # Dinamika fluktuasi harga realistis dengan transmisi tren makro 90 hari
+        progress = (days_back - d) / max(days_back, 1)  # 0.0 (90 hari lalu) -> 1.0 (hari ini)
+        macro_drift = 1.0 + (0.09 * progress)          # Kenaikan bertahap seiring transmisi kurs
+        jitter = 1.0 + (0.005 * ((d % 7) - 3))
 
         for kom, base in base_prices.items():
-            adjusted_price = int(base * day_factor)
+            imp_weight = KOMODITAS_METADATA.get(kom, {}).get("bobot_impor", 0.5)
+            kom_drift = 1.0 + ((macro_drift - 1.0) * imp_weight * 1.3)
+            adjusted_price = int(round((base * 0.91) * kom_drift * jitter / 25) * 25)
             all_records.append({
                 "komoditas": kom,
                 "tanggal": target_date,

@@ -22,6 +22,16 @@
       </div>
 
       <div class="header-controls">
+        <!-- Live Speed Layer Status Pill dengan Hover Detail -->
+        <div class="stream-status-pill normal" id="streamStatusPill" tabindex="0">
+          <span class="status-dot green" id="streamStatusDot"></span>
+          <span class="status-text" id="streamStatusText">Stream Normal</span>
+          <div class="status-tooltip" id="streamStatusTooltip">
+            <div class="tooltip-title" id="tooltipTitle">Speed Layer: Optimal</div>
+            <div class="tooltip-desc" id="tooltipDesc">Aliran streaming Kafka (9092) stabil. Tidak ada lonjakan anomali atau pelanggaran HET aktif.</div>
+          </div>
+        </div>
+
         <div class="live-clock" id="liveClock">--:--:-- WIB</div>
         <div class="refresh-indicator">
           <div class="refresh-dot"></div>
@@ -37,8 +47,8 @@
 
   <main class="dashboard-wrapper">
 
-    <!-- Speed Layer Alert Banner -->
-    <div id="liveAlertsContainer" class="live-alerts-wrapper" style="margin-top: 20px; margin-bottom: 24px;"></div>
+    <!-- Speed Layer Alert Banner (Hanya muncul dinamis jika ada Shock/Pelanggaran Aktif) -->
+    <div id="liveAlertsContainer" class="live-alerts-wrapper"></div>
 
     <!-- ═════════════════════════════════════════════════════════
          SECTION 1 — KEY METRICS
@@ -48,24 +58,31 @@
       <div class="glass-card metric-card kurs fade-in">
         <div class="metric-label">Kurs USD-IDR</div>
         <div class="metric-value" id="metricKurs">—</div>
-        <div class="metric-sub" id="metricKursSub"></div>
+        <div class="metric-sub" id="metricKursSub">spot valas interbank</div>
       </div>
 
-      <!-- Card 2: Avg Price Change -->
+      <!-- Card 2: Minyak Mentah Brent -->
+      <div class="glass-card metric-card brent fade-in">
+        <div class="metric-label">Minyak Mentah Brent</div>
+        <div class="metric-value" id="metricOil">—</div>
+        <div class="metric-sub" id="metricOilSub">energi &amp; logistik global</div>
+      </div>
+
+      <!-- Card 3: Avg Price Change -->
       <div class="glass-card metric-card change fade-in">
         <div class="metric-label">Rata-rata Δ Harga</div>
         <div class="metric-value" id="metricChange">—</div>
         <div class="metric-sub" id="metricChangeSub">perubahan harga pangan</div>
       </div>
 
-      <!-- Card 3: Anomalies -->
+      <!-- Card 4: Anomalies -->
       <div class="glass-card metric-card anomaly fade-in">
         <div class="metric-label">Anomali Aktif</div>
         <div class="metric-value" id="metricAnomaly">—</div>
         <div class="metric-sub" id="metricAnomalySub">deteksi anomali harga</div>
       </div>
 
-      <!-- Card 4: HET Violations -->
+      <!-- Card 5: HET Violations -->
       <div class="glass-card metric-card het fade-in">
         <div class="metric-label">Pelanggaran HET</div>
         <div class="metric-value" id="metricHET">—</div>
@@ -86,11 +103,17 @@
         <canvas id="chartKurs"></canvas>
       </div>
 
-      <!-- Live Prices -->
-      <div class="live-prices" id="livePrices">
-        <div class="glass-card price-card fade-in skeleton" style="min-height:90px"></div>
-        <div class="glass-card price-card fade-in skeleton" style="min-height:90px"></div>
-        <div class="glass-card price-card fade-in skeleton" style="min-height:90px"></div>
+      <!-- Live Prices Unified Table -->
+      <div class="glass-card price-table-container fade-in">
+        <div class="price-table-header">
+          <div class="chart-title" style="margin-bottom: 0;">Harga 7 Komoditas Pangan Pasar Terkini</div>
+          <span class="live-pill"><span class="pulse-dot green" style="width:6px; height:6px;"></span> Speed Stream</span>
+        </div>
+        <div class="price-items-list" id="livePrices">
+          <div class="price-item-skeleton"></div>
+          <div class="price-item-skeleton"></div>
+          <div class="price-item-skeleton"></div>
+        </div>
       </div>
     </section>
 
@@ -109,13 +132,13 @@
          SECTION 4 — ML FORECASTING
          ═════════════════════════════════════════════════════════ -->
     <div class="section-divider"></div>
-    <h2 class="section-title">ML Forecasting</h2>
+    <h2 class="section-title">Prediksi Harga 4 Minggu (ML Forecasting)</h2>
 
-    <section class="forecast-grid" aria-label="Machine learning forecast" style="grid-template-columns: 1fr;">
-      <div class="prediction-cards" id="predictionCards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px;">
-        <div class="glass-card prediction-card skeleton fade-in" style="min-height:120px"></div>
-        <div class="glass-card prediction-card skeleton fade-in" style="min-height:120px; animation-delay: 0.1s"></div>
-        <div class="glass-card prediction-card skeleton fade-in" style="min-height:120px; animation-delay: 0.2s"></div>
+    <section class="forecast-grid" aria-label="Machine learning forecast">
+      <div class="prediction-cards" id="predictionCards">
+        <div class="glass-card forecast-natural-card skeleton fade-in" style="min-height:140px"></div>
+        <div class="glass-card forecast-natural-card skeleton fade-in" style="min-height:140px; animation-delay: 0.1s"></div>
+        <div class="glass-card forecast-natural-card skeleton fade-in" style="min-height:140px; animation-delay: 0.2s"></div>
       </div>
     </section>
 
@@ -135,12 +158,12 @@
          SECTION 6 — HET EARLY WARNING
          ═════════════════════════════════════════════════════════ -->
     <div class="section-divider"></div>
-    <h2 class="section-title">HET Early Warning System</h2>
+    <h2 class="section-title">Pemantauan Batas HET (Early Warning)</h2>
 
     <section class="het-grid" id="hetGrid" aria-label="HET early warning">
-      <div class="glass-card het-card skeleton fade-in" style="min-height:160px"></div>
-      <div class="glass-card het-card skeleton fade-in" style="min-height:160px"></div>
-      <div class="glass-card het-card skeleton fade-in" style="min-height:160px"></div>
+      <div class="glass-card het-natural-card skeleton fade-in" style="min-height:140px"></div>
+      <div class="glass-card het-natural-card skeleton fade-in" style="min-height:140px"></div>
+      <div class="glass-card het-natural-card skeleton fade-in" style="min-height:140px"></div>
     </section>
 
     <!-- ═════════════════════════════════════════════════════════
@@ -181,37 +204,28 @@
   </main>
 
   <!-- ═══════════════════════════════════════════════════════════
-       FOOTER & CLUSTER TELEMETRY
+       FOOTER (Formal & Clean)
        ═══════════════════════════════════════════════════════════ -->
   <footer class="dashboard-footer">
-    <div class="telemetry-panel" id="telemetryPanel"
-      style="display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; font-size: 0.8rem;">
-      <div id="telKafka" style="display: inline-flex; align-items: center; gap: 6px;">
-        <span class="pipe-dot" id="dotKafka"
-          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
-        <span>Kafka Broker: <strong id="valKafka">Memeriksa...</strong></span>
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-brand">
+          <strong>FoodPulse</strong> — Macro-to-Micro Food Security Intelligence Platform
+        </div>
+        <div class="footer-copy">
+          © 2026 FoodPulse. Hak Cipta Dilindungi. Sistem Pemantauan Dini Pangan &amp; Makroekonomi Nasional.
+        </div>
       </div>
-      <span style="opacity: 0.25;">•</span>
-      <div id="telHdfs" style="display: inline-flex; align-items: center; gap: 6px;">
-        <span class="pipe-dot" id="dotHdfs"
-          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
-        <span>HDFS Lakehouse: <strong id="valHdfs">Memeriksa...</strong></span>
-      </div>
-      <span style="opacity: 0.25;">•</span>
-      <div id="telSpeed" style="display: inline-flex; align-items: center; gap: 6px;">
-        <span class="pipe-dot" id="dotSpeed"
-          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
-        <span>Speed Stream: <strong id="valSpeed">Memeriksa...</strong></span>
-      </div>
-      <span style="opacity: 0.25;">•</span>
-      <div id="telSpark" style="display: inline-flex; align-items: center; gap: 6px;">
-        <span class="pipe-dot" id="dotSpark"
-          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
-        <span>PySpark AI: <strong id="valSpark">Memeriksa...</strong></span>
+      <div class="footer-right">
+        <div class="footer-status-badge">
+          <span class="status-dot green" id="dotSystemStatus"></span>
+          <span id="valSystemStatus">Klaster &amp; Streaming Operasional</span>
+        </div>
+        <div class="footer-sources">
+          Sumber Data: Bank Indonesia • Badan Pangan Nasional (Bapanas) • EIA • BPS
+        </div>
       </div>
     </div>
-    <div class="footer-sources">Bank Indonesia &amp; Live Spot (Kurs) • Badan Pangan Nasional (Pangan) • EIA (Minyak) • BPS (Inflasi)</div>
-    <div class="footer-tech">Arsitektur Lambda Enterprise: Kafka Ingestion → HDFS Lakehouse → PySpark ML → Flask Serving</div>
   </footer>
 
   <!-- Chart.js 4.x CDN -->

@@ -1,5 +1,5 @@
 """
-Gold Layer — SembakoWatch
+Gold Layer — FoodPulse
 Macro-to-Micro Food Security Intelligence & Early Warning Engine
 - Agregasi Bulanan & Dynamic Time-Lag Analysis (Cross-Correlation)
 - Multi-Variate Forecasting (PySpark ML Linear Regression: Kurs + Minyak)
@@ -378,7 +378,7 @@ def run_het_warning(pangan_by_kom, forecast_data):
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     spark = SparkSession.builder \
-        .appName("GoldLayer-AI-SembakoWatch") \
+        .appName("GoldLayer-AI-FoodPulse") \
         .master("local[*]") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
         .config("spark.driver.host", "127.0.0.1") \

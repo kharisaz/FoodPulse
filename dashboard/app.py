@@ -234,17 +234,20 @@ def get_summary():
     if kurs_records:
         kurs_records.sort(key=lambda r: r.get("timestamp", ""))
         current_rate = kurs_records[-1].get("rate", 0)
+        current_oil  = kurs_records[-1].get("oil_price_usd", None)
     else:
         current_rate = 0
+        current_oil  = None
 
     top_fpvi = analytics["komoditas"][0] if analytics.get("komoditas") else None
     kritis_het = [
         w for w in het.get("warnings", [])
-        if w.get("status") in ("DARURAT", "KRITIS (Melanggar HET)")
+        if "KRITIS" in w.get("status", "").upper() or "DARURAT" in w.get("status", "").upper()
     ]
 
     return jsonify({
         "current_kurs": current_rate,
+        "current_oil": current_oil,
         "top_vulnerable": top_fpvi,
         "total_het_breach": len(kritis_het),
         "total_anomalies": anomaly.get("summary", {}).get("total_anomalies", 0),

@@ -14,7 +14,7 @@ HDFS_SILVER_PATH   = "hdfs://localhost:8020/data/lakehouse/silver"
 
 def transform_silver():
     spark = SparkSession.builder \
-        .appName("SilverLayer-SembakoWatch") \
+        .appName("SilverLayer-FoodPulse") \
         .master("local[*]") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
         .config("spark.driver.host", "127.0.0.1") \

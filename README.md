@@ -93,7 +93,7 @@ FoodPulse memantau keranjang 7 komoditas pangan pokok dengan metadata acuan regu
 ## 5. Struktur Direktori Proyek
 
 ```text
-sembako_watch/
+FoodPulse/
 ├── config/
 │   └── kafka_config.py          # Konfigurasi sentral: Kafka Broker, HDFS URL, Topik, Metadata HET
 ├── producers/

@@ -76,7 +76,7 @@ def main():
         value_serializer=lambda v: json.dumps(v).encode("utf-8")
     )
     print(f"🚀 Dual-Macro Producer Aktif! Streaming Kurs USD/IDR & Brent Oil ke topik: '{TOPIC_KURS}'")
-    print("Interval: Setiap 30 detik...\n")
+    print("Interval: Setiap 25 detik...\n")
 
     try:
         while True:
@@ -84,7 +84,7 @@ def main():
             producer.send(TOPIC_KURS, value=rec)
             print(f"[LIVE MAKRO] {rec['timestamp']} | USD/IDR: Rp {rec['rate']:,} | Brent Oil: ${rec['oil_price_usd']}/BBL")
             producer.flush()
-            time.sleep(30)
+            time.sleep(25)
 
     except KeyboardInterrupt:
         producer.close()

@@ -1,191 +1,159 @@
 """
 Gold Layer — SembakoWatch
-Agregasi bulanan kurs, harga pangan, dan harga minyak (semua dari Silver),
-tempel inflasi BPS sebagai pembanding, hitung korelasi Pearson per komoditas
-(vs kurs & vs minyak), lalu ekspor JSON ke dashboard/data/gold/ untuk Flask.
-
-Fitur ML:
-  1. Forecasting  — PySpark ML Linear Regression per komoditas
-  2. Anomaly Detection — Z-Score residual untuk deteksi penimbunan/gagal panen
-  3. HET Early Warning — Peringatan dini Harga Eceran Tertinggi
+Macro-to-Micro Food Security Intelligence & Early Warning Engine
+- Agregasi Bulanan & Dynamic Time-Lag Analysis (Cross-Correlation)
+- Multi-Variate Forecasting (PySpark ML Linear Regression: Kurs + Minyak)
+- Residual-Based Anomaly Detection (Deteksi Penimbunan)
+- Food Price Vulnerability Index (FPVI 2.0)
+- HET Early Warning & Runway Calculation
 """
 
 import os
+import sys
 import json
+import numpy as np
+
 os.environ["HADOOP_USER_NAME"] = "root"
 
-import numpy as np
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, year, month, avg, round as spark_round,
-    corr as spark_corr, lit, monotonically_increasing_id
+    corr as spark_corr, lag, lit
 )
+from pyspark.sql.window import Window
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
 
-HDFS_SILVER_PATH    = "hdfs://localhost:8020/data/lakehouse/silver"
-HDFS_BRONZE_BPS     = "hdfs://localhost:8020/data/lakehouse/bronze_parquet/bps"
-HDFS_GOLD_PATH      = "hdfs://localhost:8020/data/lakehouse/gold"
-LOCAL_GOLD_DIR      = "dashboard/data/gold"
+# Import konfigurasi dan metadata resmi dari config
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from config.kafka_config import (
+    HDFS_SILVER_PATH, GOLD_PATH, KOMODITAS_METADATA
+)
 
-WEEKS_AHEAD = 4   # horizon proyeksi dampak kurs ke harga
-
-# ── Harga Eceran Tertinggi (HET) — referensi kebijakan pemerintah ───────────
-HET_THRESHOLDS = {
-    "Beras Medium":       15500,
-    "Bawang Putih Impor": 60000,
-    "Cabai Rawit Lokal":  80000,
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Utility Functions (existing)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def import_weight(nama_komoditas: str) -> float:
-    n = nama_komoditas.lower()
-    if "impor" in n:
-        return 1.0
-    if "lokal" in n:
-        return 0.2
-    return 0.5  # status tidak diketahui / semi-impor
-
-
-def generate_insight(kom: str, corr_kurs: float, corr_oil, import_w: float,
-                      fpvi_level: str, status: str) -> str:
-    parts = []
-
-    if import_w >= 1.0:
-        parts.append(
-            f"{kom} adalah komoditas IMPOR - harga dibeli dalam USD, sehingga "
-            f"depresiasi rupiah menaikkan biaya pokok secara LANGSUNG "
-            f"(korelasi r={corr_kurs:.2f} konsisten dengan kanal kausal ini)."
-        )
-    elif import_w <= 0.2:
-        parts.append(
-            f"{kom} adalah komoditas LOKAL - secara teori TIDAK terdampak kurs "
-            f"secara langsung. Korelasi yang teramati (r={corr_kurs:.2f}) lebih "
-            f"mungkin disebabkan faktor lain: musim tanam/panen, cuaca, biaya "
-            f"distribusi, atau kebetulan tren waktu yang sejalan dengan kurs - "
-            f"BUKAN hubungan kausal langsung dari kurs ke harga."
-        )
-    else:
-        parts.append(
-            f"{kom} berstatus ketergantungan impor tidak pasti (semi-impor) - "
-            f"pengaruh kurs (r={corr_kurs:.2f}) kemungkinan datang dari komponen "
-            f"input produksi (pupuk, pakan, BBM) yang sebagian diimpor, bukan "
-            f"dari komoditas itu sendiri."
-        )
-
-    if corr_oil is not None and abs(corr_oil) >= 0.3:
-        arah = "naik" if corr_oil > 0 else "turun"
-        parts.append(
-            f"Korelasi dengan harga minyak Brent (r={corr_oil:.2f}) menunjukkan "
-            f"biaya distribusi/transportasi turut berperan - saat harga minyak "
-            f"{arah}, harga {kom} cenderung mengikuti arah yang sama."
-        )
-
-    if status == "RAWAN NAIK":
-        parts.append("Tren kurs bulan terakhir menguat - risiko harga naik dalam waktu dekat.")
-    elif status == "POTENSI TURUN":
-        parts.append("Tren kurs melemah - ada potensi harga turun/stabil dalam waktu dekat.")
-
-    prioritas = {"Tinggi": "prioritas pemantauan tinggi", "Sedang": "pemantauan rutin", "Rendah": "risiko rendah saat ini"}
-    parts.append(f"Skor FPVI: {fpvi_level} ({prioritas.get(fpvi_level, '-')}).")
-
-    return " ".join(parts)
+LOCAL_GOLD_DIR = "dashboard/data/gold"
+WEEKS_AHEAD = 4
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ML Feature 1: Forecasting (PySpark ML Linear Regression)
+# 0. DYNAMIC TIME-LAG TRANSMISSION ANALYSIS (Cross-Correlation Harian)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def run_ml_forecasting(spark, monthly_joined, kurs_data, pangan_by_kom):
+def compute_dynamic_time_lag(df_silver):
     """
-    Melatih model Linear Regression per komoditas menggunakan PySpark ML.
-    Feature: avg_kurs  |  Label: avg_harga
-    Output: prediksi harga 1-4 minggu ke depan berdasarkan proyeksi kurs.
+    Menghitung lag hari (0, 7, 14, 21) dengan korelasi Pearson tertinggi
+    antara kurs/minyak terhadap harga komoditas harian.
     """
-    print("\n[ML] ═══ Memulai ML Forecasting (PySpark ML Linear Regression) ═══")
+    lag_days_candidates = [0, 7, 14, 21]
+    w_kom = Window.partitionBy("komoditas").orderBy("date")
 
-    kurs_sorted = sorted(
-        [d for d in kurs_data if d["avg_kurs"] is not None],
-        key=lambda d: (d["year"], d["month"])
-    )
+    df_lagged = df_silver
+    for d in lag_days_candidates:
+        if d > 0:
+            df_lagged = df_lagged \
+                .withColumn(f"kurs_lag_{d}", lag("rate", d).over(w_kom)) \
+                .withColumn(f"oil_lag_{d}", lag("oil_price_usd", d).over(w_kom))
+        else:
+            df_lagged = df_lagged \
+                .withColumn("kurs_lag_0", col("rate")) \
+                .withColumn("oil_lag_0", col("oil_price_usd"))
+
+    agg_exprs = []
+    for d in lag_days_candidates:
+        agg_exprs.append(spark_corr(f"kurs_lag_{d}", "harga").alias(f"corr_kurs_{d}"))
+        agg_exprs.append(spark_corr(f"oil_lag_{d}", "harga").alias(f"corr_oil_{d}"))
+
+    lag_rows = df_lagged.groupBy("komoditas").agg(*agg_exprs).collect()
+
+    lag_map = {}
+    for r in lag_rows:
+        kom = r["komoditas"]
+        best_lag = 0
+        best_score = -1.0
+
+        for d in lag_days_candidates:
+            ck = abs(r[f"corr_kurs_{d}"] or 0.0)
+            co = abs(r[f"corr_oil_{d}"] or 0.0)
+            combined_score = (0.6 * ck) + (0.4 * co)
+            if combined_score > best_score:
+                best_score = combined_score
+                best_lag = d
+
+        lag_map[kom] = {
+            "best_lag_days": best_lag,
+            "max_lag_corr": round(best_score, 4)
+        }
+    return lag_map
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. ML MULTI-VARIATE FORECASTING (Kurs + Minyak Dunia -> Harga Pangan)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_multivariate_forecasting(monthly_joined, kurs_sorted, pangan_by_kom):
+    print("\n[ML] ═══ Melatih Model Multi-Variate Forecasting (PySpark ML) ═══")
+
     if len(kurs_sorted) < 3:
-        print("[ML] WARN: Data kurs < 3 bulan, forecasting dilewati")
-        return {"model_info": {"algorithm": "PySpark ML Linear Regression", "status": "SKIPPED", "reason": "Data kurang dari 3 bulan"}, "forecasts": []}
+        return {"model_info": {"status": "SKIPPED", "reason": "Data historis < 3 bulan"}, "forecasts": []}
 
-    kurs_terakhir = kurs_sorted[-1]["avg_kurs"]
-    kurs_trend = kurs_sorted[-1]["avg_kurs"] - kurs_sorted[-2]["avg_kurs"]
-    weekly_trend = kurs_trend / 4.345  # trend per minggu
+    latest_kurs = kurs_sorted[-1]["avg_kurs"] or 15800.0
+    latest_oil  = kurs_sorted[-1]["avg_oil_usd"] or 75.0
 
-    komoditas_list = list(pangan_by_kom.keys())
+    # Gunakan window hingga 3 bulan terakhir agar tren mingguan lebih stabil
+    lookback_idx = max(0, len(kurs_sorted) - 4)
+    months_span  = max(1, len(kurs_sorted) - 1 - lookback_idx)
+
+    base_kurs = kurs_sorted[lookback_idx]["avg_kurs"] or latest_kurs
+    base_oil  = kurs_sorted[lookback_idx]["avg_oil_usd"] or latest_oil
+
+    weekly_kurs_trend = (latest_kurs - base_kurs) / (months_span * 4.345)
+    weekly_oil_trend  = (latest_oil - base_oil) / (months_span * 4.345)
+
     forecasts = []
 
-    for kom in komoditas_list:
+    for kom in pangan_by_kom.keys():
         try:
-            # Filter data untuk komoditas ini
             kom_df = monthly_joined.filter(col("komoditas") == kom) \
                 .select(
                     col("avg_kurs").cast("double"),
+                    col("avg_oil_usd").cast("double"),
                     col("avg_harga").cast("double")
                 ).dropna()
 
-            row_count = kom_df.count()
-            if row_count < 3:
-                print(f"[ML]   {kom}: SKIP (data hanya {row_count} bulan)")
+            if kom_df.count() < 3:
                 continue
 
-            # Assemble fitur untuk ML
             assembler = VectorAssembler(
-                inputCols=["avg_kurs"],
+                inputCols=["avg_kurs", "avg_oil_usd"],
                 outputCol="features"
             )
             assembled_df = assembler.transform(kom_df)
 
-            # Train Linear Regression model
-            lr = LinearRegression(
-                featuresCol="features",
-                labelCol="avg_harga",
-                maxIter=100,
-                regParam=0.01,
-                elasticNetParam=0.0
-            )
+            lr = LinearRegression(featuresCol="features", labelCol="avg_harga", maxIter=50, regParam=0.01)
             model = lr.fit(assembled_df)
 
-            # Ekstrak koefisien model untuk prediksi langsung (tanpa serialisasi)
-            coeff = float(model.coefficients[0])
-            intcpt = float(model.intercept)
-
-            # Evaluate model pada data training
             predictions = model.transform(assembled_df)
-            evaluator_rmse = RegressionEvaluator(
-                labelCol="avg_harga", predictionCol="prediction", metricName="rmse"
-            )
-            evaluator_r2 = RegressionEvaluator(
-                labelCol="avg_harga", predictionCol="prediction", metricName="r2"
-            )
+            evaluator_rmse = RegressionEvaluator(labelCol="avg_harga", predictionCol="prediction", metricName="rmse")
+            evaluator_r2   = RegressionEvaluator(labelCol="avg_harga", predictionCol="prediction", metricName="r2")
+
             rmse = evaluator_rmse.evaluate(predictions)
-            r2 = evaluator_r2.evaluate(predictions)
+            r2   = max(0.0, evaluator_r2.evaluate(predictions))
 
-            # Ambil harga terakhir
-            series = pangan_by_kom.get(kom, [])
-            sorted_series = sorted(series, key=lambda d: (d["year"], d["month"]))
-            current_price = sorted_series[-1]["avg_harga"] if sorted_series else 0
+            coeff_kurs = float(model.coefficients[0])
+            coeff_oil  = float(model.coefficients[1])
+            intcpt     = float(model.intercept)
 
-            # Prediksi 4 minggu ke depan menggunakan koefisien langsung
-            # Formula: predicted_price = coefficient * projected_kurs + intercept
-            # (identik secara matematis dengan model.transform())
+            current_price = pangan_by_kom[kom][-1]["avg_harga"] if pangan_by_kom.get(kom) else 0.0
+
             week_predictions = []
-            for week in range(1, WEEKS_AHEAD + 1):
-                projected_kurs = kurs_terakhir + weekly_trend * week
-                predicted_price = max(0, coeff * projected_kurs + intcpt)
+            for w in range(1, WEEKS_AHEAD + 1):
+                proj_kurs  = latest_kurs + (weekly_kurs_trend * w)
+                proj_oil   = max(20.0, latest_oil + (weekly_oil_trend * w))
+                pred_price = max(1000.0, (coeff_kurs * proj_kurs) + (coeff_oil * proj_oil) + intcpt)
 
                 week_predictions.append({
-                    "week": week,
-                    "predicted_price": round(predicted_price),
-                    "kurs_assumed": round(projected_kurs, 2)
+                    "week": w,
+                    "predicted_price": round(pred_price),
+                    "kurs_assumed": round(proj_kurs, 2),
+                    "oil_assumed": round(proj_oil, 2)
                 })
 
             forecasts.append({
@@ -193,330 +161,224 @@ def run_ml_forecasting(spark, monthly_joined, kurs_data, pangan_by_kom):
                 "rmse": round(rmse, 2),
                 "r2_score": round(r2, 4),
                 "current_price": round(current_price),
-                "coefficient": round(coeff, 4),
+                "coeff_kurs": round(coeff_kurs, 4),
+                "coeff_oil": round(coeff_oil, 4),
                 "intercept": round(intcpt, 2),
-                "training_samples": row_count,
                 "predictions": week_predictions
             })
-
-            trend_emoji = "📈" if week_predictions[-1]["predicted_price"] > current_price else "📉"
-            print(f"[ML]   {kom}: R²={r2:.4f}, RMSE={rmse:.0f} {trend_emoji} "
-                  f"Prediksi Minggu-4: Rp {week_predictions[-1]['predicted_price']:,.0f}")
+            print(f"[ML]   {kom:25s} | R²={r2:.3f} | RMSE=Rp {rmse:,.0f} | Minggu-4: Rp {week_predictions[-1]['predicted_price']:,}")
 
         except Exception as e:
-            print(f"[ML]   {kom}: ERROR - {e}")
+            print(f"[ML]   {kom}: Skip ({e})")
             continue
 
-    result = {
+    return {
         "model_info": {
-            "algorithm": "PySpark ML Linear Regression",
-            "features": ["avg_kurs"],
+            "algorithm": "PySpark ML Multi-Variate Linear Regression",
+            "features": ["avg_kurs", "avg_oil_usd"],
             "training_months": len(kurs_sorted),
             "status": "OK"
         },
         "forecasts": forecasts
     }
 
-    print(f"[ML] ═══ Forecasting selesai: {len(forecasts)} model terlatih ═══\n")
-    return result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ML Feature 2: Anomaly Detection (Z-Score Residual)
+# 2. RESIDUAL ANOMALY DETECTION (Memisahkan Efek Makro vs Penimbunan)
 # ─────────────────────────────────────────────────────────────────────────────
+def run_residual_anomaly_detection(kurs_sorted, pangan_by_kom):
+    print("\n[ANOMALY] ═══ Menjalankan Deteksi Anomali Residu Makro ═══")
 
-def run_anomaly_detection(kurs_data, pangan_by_kom, corr_data):
-    """
-    Deteksi anomali harga: jika harga aktual menyimpang jauh dari
-    harga yang diperkirakan berdasarkan model regresi (kurs → harga),
-    tandai sebagai anomali — kemungkinan penimbunan, gagal panen,
-    atau gangguan distribusi.
-    """
-    print("[ML] ═══ Memulai Anomaly Detection (Z-Score Residual) ═══")
-
-    kurs_sorted = sorted(
-        [d for d in kurs_data if d["avg_kurs"] is not None],
-        key=lambda d: (d["year"], d["month"])
-    )
-    if len(kurs_sorted) < 3:
-        print("[ML] WARN: Data kurs < 3 bulan, anomaly detection dilewati")
-        return {"anomalies": [], "summary": {"total_anomalies": 0, "high_severity": 0, "medium_severity": 0, "low_severity": 0}}
-
-    kurs_lookup = {(d["year"], d["month"]): d["avg_kurs"] for d in kurs_sorted}
-
+    kurs_lookup = {(d["year"], d["month"]): (d["avg_kurs"], d["avg_oil_usd"]) for d in kurs_sorted}
     all_anomalies = []
 
     for kom, series in pangan_by_kom.items():
-        pairs = [
-            (kurs_lookup[(d["year"], d["month"])], d["avg_harga"], d["year"], d["month"])
-            for d in series if (d["year"], d["month"]) in kurs_lookup
-        ]
-        if len(pairs) < 3:
+        data_points = []
+        for d in series:
+            key = (d["year"], d["month"])
+            if key in kurs_lookup and kurs_lookup[key][0] is not None:
+                k_val, o_val = kurs_lookup[key]
+                o_val = o_val or 75.0
+                data_points.append((k_val, o_val, d["avg_harga"], d["year"], d["month"]))
+
+        if len(data_points) < 3:
             continue
 
-        kurs_vals = np.array([p[0] for p in pairs], dtype=float)
-        harga_vals = np.array([p[1] for p in pairs], dtype=float)
+        kurs_arr  = np.array([p[0] for p in data_points])
+        oil_arr   = np.array([p[1] for p in data_points])
+        harga_arr = np.array([p[2] for p in data_points])
 
-        # Fit regresi linear
+        X = np.column_stack([kurs_arr, oil_arr, np.ones(len(kurs_arr))])
         try:
-            slope, intercept = np.polyfit(kurs_vals, harga_vals, 1)
+            coeffs, _, _, _ = np.linalg.lstsq(X, harga_arr, rcond=None)
+            expected_prices = np.dot(X, coeffs)
         except Exception:
-            continue
+            expected_prices = harga_arr
 
-        # Hitung residual (selisih harga aktual vs harga expected)
-        expected = slope * kurs_vals + intercept
-        residuals = harga_vals - expected
-        mean_res = np.mean(residuals)
-        std_res = np.std(residuals)
+        residuals = harga_arr - expected_prices
+        mean_res  = np.mean(residuals)
+        std_res   = np.std(residuals)
 
-        if std_res < 1:  # guard against near-zero std
+        if std_res < 1e-6:
             continue
 
         z_scores = (residuals - mean_res) / std_res
 
-        for i, (kurs, harga, yr, mo) in enumerate(pairs):
-            z = abs(z_scores[i])
-            if z >= 1.8:  # threshold anomali
-                deviasi_persen = round(100 * (harga - expected[i]) / expected[i], 1)
+        for i, pt in enumerate(data_points):
+            z = float(z_scores[i])
+            # Fokus pada lonjakan harga positif (z >= 1.8) atau penyimpangan ekstrem
+            if abs(z) >= 1.8 and expected_prices[i] > 0:
+                deviasi_pct = round(100 * (harga_arr[i] - expected_prices[i]) / expected_prices[i], 1)
 
-                if z >= 3.0:
+                if z >= 2.5:
                     severity = "HIGH"
-                    penyebab = "Lonjakan harga SANGAT tidak wajar — kemungkinan besar penimbunan massal atau krisis pasokan serius"
-                elif z >= 2.5:
-                    severity = "HIGH"
-                    penyebab = "Lonjakan harga tidak wajar — kemungkinan penimbunan atau gagal panen"
-                elif z >= 2.0:
+                    sebab = "Lonjakan harga ekstrem di luar pengaruh makro (Indikasi Penimbunan / Kartel Pasar)"
+                elif z >= 1.8:
                     severity = "MEDIUM"
-                    penyebab = "Harga menyimpang signifikan — kemungkinan gangguan distribusi atau spekulasi pasar"
+                    sebab = "Penyimpangan signifikan di atas tren makro (Indikasi Gangguan Distribusi Lokal)"
                 else:
                     severity = "LOW"
-                    penyebab = "Harga sedikit tidak wajar — perlu pemantauan lebih lanjut"
+                    sebab = "Anomali penurunan harga tajam di bawah ekspektasi makro (Panen Raya / Banjir Pasokan)"
 
                 all_anomalies.append({
                     "komoditas": kom,
-                    "bulan": f"{yr:04d}-{mo:02d}",
-                    "harga_aktual": round(harga),
-                    "harga_expected": round(expected[i]),
-                    "deviasi_persen": deviasi_persen,
-                    "z_score": round(z_scores[i], 2),
+                    "bulan": f"{pt[3]:04d}-{pt[4]:02d}",
+                    "harga_aktual": round(harga_arr[i]),
+                    "harga_expected": round(expected_prices[i]),
+                    "deviasi_persen": deviasi_pct,
+                    "z_score": round(abs(z), 2),
                     "severity": severity,
-                    "kemungkinan_penyebab": penyebab
+                    "kemungkinan_penyebab": sebab
                 })
 
-    # Sort anomalies by severity then by z_score
-    severity_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    all_anomalies.sort(key=lambda a: (severity_order.get(a["severity"], 3), -abs(a["z_score"])))
+    all_anomalies.sort(key=lambda x: -x["z_score"])
+    print(f"[ANOMALY] Terdeteksi {len(all_anomalies)} anomali pasar.")
 
-    high = sum(1 for a in all_anomalies if a["severity"] == "HIGH")
-    medium = sum(1 for a in all_anomalies if a["severity"] == "MEDIUM")
-    low = sum(1 for a in all_anomalies if a["severity"] == "LOW")
-
-    result = {
+    return {
         "anomalies": all_anomalies,
         "summary": {
             "total_anomalies": len(all_anomalies),
-            "high_severity": high,
-            "medium_severity": medium,
-            "low_severity": low
+            "high_severity": sum(1 for a in all_anomalies if a["severity"] == "HIGH"),
+            "medium_severity": sum(1 for a in all_anomalies if a["severity"] == "MEDIUM")
         }
     }
 
-    print(f"[ML]   Terdeteksi {len(all_anomalies)} anomali "
-          f"(HIGH: {high}, MEDIUM: {medium}, LOW: {low})")
-    print("[ML] ═══ Anomaly Detection selesai ═══\n")
-    return result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  ML Feature 3: HET Early Warning System
+# 3. FPVI 2.0 & TIME-LAG TRANSMISSION ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
+def compute_fpvi_and_lag(pangan_by_kom, corr_data, lag_map):
+    results = []
+    vols = [float(np.std([d["avg_harga"] for d in s])) if len(s) >= 2 else 0.0 for s in pangan_by_kom.values()]
+    vmin, vmax = (min(vols), max(vols)) if vols else (0.0, 1.0)
 
-def run_het_warning(pangan_by_kom, forecast_data):
-    """
-    Bandingkan harga terakhir dan harga proyeksi ML terhadap
-    Harga Eceran Tertinggi (HET) yang ditetapkan pemerintah.
-    """
-    print("[ML] ═══ Memulai HET Early Warning System ═══")
+    for r in corr_data:
+        kom = r["komoditas"]
+        meta = KOMODITAS_METADATA.get(kom, {"bobot_impor": 0.3, "kategori": "Umum"})
 
-    warnings = []
-    forecast_lookup = {}
-    for fc in forecast_data.get("forecasts", []):
-        forecast_lookup[fc["komoditas"]] = fc
-
-    for kom, het_value in HET_THRESHOLDS.items():
         series = pangan_by_kom.get(kom, [])
-        if not series:
+        vol = float(np.std([d["avg_harga"] for d in series])) if len(series) >= 2 else 0.0
+        norm_vol = 0.0 if vmax == vmin else (vol - vmin) / (vmax - vmin)
+
+        c_kurs = abs(r["pearson_corr_kurs"])
+        c_oil  = abs(r.get("pearson_corr_oil") or 0.0)
+        b_imp  = meta["bobot_impor"]
+
+        # Formula FPVI 2.0
+        fpvi_score = round(100 * (0.35 * c_kurs + 0.25 * c_oil + 0.20 * norm_vol + 0.20 * b_imp), 1)
+        level = "Tinggi" if fpvi_score >= 65 else "Sedang" if fpvi_score >= 35 else "Rendah"
+
+        # Gunakan hasil Dynamic Lag aktual dari Silver Layer jika tersedia
+        lag_info = lag_map.get(kom)
+        if lag_info and lag_info["max_lag_corr"] > 0.15:
+            days = lag_info["best_lag_days"]
+            if days == 0:
+                peak_lag = "0 Hari (Respons Instan / Pasar Lokal)"
+            elif days == 7:
+                peak_lag = "7 Hari (Transmisi Distribusi Mingguan)"
+            elif days == 14:
+                peak_lag = "14 Hari (Transmisi Valas & Stok Importir)"
+            else:
+                peak_lag = "21 Hari (Siklus Pakan, Logistik & Manufaktur)"
+        else:
+            if b_imp >= 0.8:
+                peak_lag = "14 Hari (Estimasi Transmisi Valas Langsung)"
+            elif b_imp >= 0.5:
+                peak_lag = "21 Hari (Estimasi Siklus Pakan & Logistik)"
+            else:
+                peak_lag = "0–7 Hari (Didominasi Musim Lokal)"
+
+        latest_price = series[-1]["avg_harga"] if series else 0.0
+
+        results.append({
+            "komoditas": kom,
+            "kategori": meta["kategori"],
+            "fpvi_score": fpvi_score,
+            "fpvi_level": level,
+            "peak_transmission_lag": peak_lag,
+            "optimal_lag_days": lag_info["best_lag_days"] if lag_info else None,
+            "harga_terakhir": round(latest_price),
+            "corr_kurs": r["pearson_corr_kurs"],
+            "corr_oil": r.get("pearson_corr_oil")
+        })
+
+    results.sort(key=lambda x: -x["fpvi_score"])
+    return {"komoditas": results}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. HET EARLY WARNING & RUNWAY SYSTEM
+# ─────────────────────────────────────────────────────────────────────────────
+def run_het_warning(pangan_by_kom, forecast_data):
+    warnings = []
+    fc_lookup = {f["komoditas"]: f for f in forecast_data.get("forecasts", [])}
+
+    for kom, meta in KOMODITAS_METADATA.items():
+        het = meta["het"]
+        series = pangan_by_kom.get(kom, [])
+        if not series or not het:
             continue
 
-        sorted_series = sorted(series, key=lambda d: (d["year"], d["month"]))
-        harga_terakhir = sorted_series[-1]["avg_harga"]
-        persen_dari_het = round(100 * harga_terakhir / het_value, 1)
+        latest_price = series[-1]["avg_harga"]
+        pct_of_het = round(100 * (latest_price / het), 1)
 
-        # Tentukan status
-        if persen_dari_het >= 120:
+        if pct_of_het >= 120:
             status = "DARURAT"
-        elif persen_dari_het >= 100:
-            status = "KRITIS"
-        elif persen_dari_het >= 80:
+        elif pct_of_het >= 100:
+            status = "KRITIS (Melanggar HET)"
+        elif pct_of_het >= 80:
             status = "WASPADA"
         else:
             status = "AMAN"
 
-        # Cek proyeksi ML
-        proyeksi_tembus = False
-        estimasi_minggu_tembus = None
-        fc = forecast_lookup.get(kom)
+        runway_week = None
+        fc = fc_lookup.get(kom)
         if fc and fc.get("predictions"):
             for pred in fc["predictions"]:
-                if pred["predicted_price"] >= het_value:
-                    proyeksi_tembus = True
-                    estimasi_minggu_tembus = pred["week"]
+                if pred["predicted_price"] >= het:
+                    runway_week = pred["week"]
                     break
-
-        # Hitung tren harga dari 2 bulan terakhir
-        tren_harga = None
-        if len(sorted_series) >= 2:
-            tren_harga = round(sorted_series[-1]["avg_harga"] - sorted_series[-2]["avg_harga"])
 
         warnings.append({
             "komoditas": kom,
-            "harga_terakhir": round(harga_terakhir),
-            "het": het_value,
-            "persen_dari_het": persen_dari_het,
+            "harga_terakhir": round(latest_price),
+            "het": het,
+            "satuan": meta["satuan"],
+            "persen_dari_het": pct_of_het,
             "status": status,
-            "proyeksi_tembus_het": proyeksi_tembus,
-            "estimasi_minggu_tembus": estimasi_minggu_tembus,
-            "tren_harga_bulanan": tren_harga
+            "proyeksi_jebol_het": runway_week is not None,
+            "estimasi_minggu_jebol": runway_week
         })
 
-        emoji = {"AMAN": "🟢", "WASPADA": "🟡", "KRITIS": "🔴", "DARURAT": "🚨"}
-        print(f"[ML]   {emoji.get(status, '⚪')} {kom}: "
-              f"Rp {harga_terakhir:,.0f} / HET Rp {het_value:,.0f} "
-              f"({persen_dari_het:.1f}%) → {status}"
-              f"{' ⚠️ PROYEKSI TEMBUS!' if proyeksi_tembus else ''}")
-
-    result = {
-        "het_thresholds": HET_THRESHOLDS,
-        "warnings": warnings
-    }
-
-    print("[ML] ═══ HET Early Warning selesai ═══\n")
-    return result
+    return {"warnings": warnings}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Existing: FPVI Analytics (preserved)
+# PIPELINE UTAMA (MAIN EXECUTION)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def compute_analytics(kurs_data: list, pangan_by_kom: dict, corr_data: list) -> dict:
-    kurs_sorted = sorted(
-        [d for d in kurs_data if d["avg_kurs"] is not None],
-        key=lambda d: (d["year"], d["month"])
-    )
-    if len(kurs_sorted) < 2:
-        return {"error": "Data kurs bulanan tidak cukup untuk analitik (butuh >= 2 bulan)"}
-
-    kurs_lookup = {(d["year"], d["month"]): d["avg_kurs"] for d in kurs_sorted}
-    kurs_trend_per_bulan = kurs_sorted[-1]["avg_kurs"] - kurs_sorted[-2]["avg_kurs"]
-    months_ahead = WEEKS_AHEAD / 4.345
-    kurs_terakhir = kurs_sorted[-1]["avg_kurs"]
-    kurs_proyeksi = kurs_terakhir + kurs_trend_per_bulan * months_ahead
-
-    per_komoditas = []
-    for r in corr_data:
-        kom = r["komoditas"]
-        series = pangan_by_kom.get(kom, [])
-        pairs = [
-            (kurs_lookup[(d["year"], d["month"])], d["avg_harga"])
-            for d in series if (d["year"], d["month"]) in kurs_lookup
-        ]
-        if len(pairs) < 2:
-            continue
-
-        kurs_vals  = np.array([p[0] for p in pairs], dtype=float)
-        harga_vals = np.array([p[1] for p in pairs], dtype=float)
-
-        try:
-            slope, intercept = np.polyfit(kurs_vals, harga_vals, 1)
-        except Exception:
-            slope, intercept = 0.0, float(harga_vals.mean())
-
-        per_komoditas.append({
-            "komoditas": kom,
-            "slope": float(slope),
-            "intercept": float(intercept),
-            "volatility": float(np.std(harga_vals)),
-            "corr_kurs": r["pearson_corr"],
-            "corr_strength": abs(r["pearson_corr"]),
-            "corr_oil": r.get("pearson_corr_oil"),
-            "latest_harga": float(harga_vals[-1]),
-        })
-
-    if not per_komoditas:
-        return {"error": "Tidak ada komoditas dengan data harga+kurs yang cukup untuk analitik"}
-
-    vols = [a["volatility"] for a in per_komoditas]
-    vmin, vmax = min(vols), max(vols)
-
-    def norm_vol(v):
-        return 0.0 if vmax == vmin else (v - vmin) / (vmax - vmin)
-
-    results = []
-    for a in per_komoditas:
-        fpvi = round(100 * (
-            0.5 * a["corr_strength"] +
-            0.3 * norm_vol(a["volatility"]) +
-            0.2 * import_weight(a["komoditas"])
-        ), 1)
-        level = "Tinggi" if fpvi >= 65 else "Sedang" if fpvi >= 35 else "Rendah"
-
-        if a["corr_strength"] >= 0.5 and kurs_trend_per_bulan > 0:
-            status = "RAWAN NAIK"
-        elif a["corr_strength"] >= 0.5 and kurs_trend_per_bulan < 0:
-            status = "POTENSI TURUN"
-        else:
-            status = "STABIL"
-
-        proyeksi_harga = a["slope"] * kurs_proyeksi + a["intercept"]
-        dampak_persen = (
-            round(100 * (proyeksi_harga - a["latest_harga"]) / a["latest_harga"], 2)
-            if a["latest_harga"] else None
-        )
-
-        iw = import_weight(a["komoditas"])
-        insight = generate_insight(
-            a["komoditas"], a["corr_kurs"], a["corr_oil"], iw, level, status
-        )
-
-        results.append({
-            "komoditas": a["komoditas"],
-            "fpvi_score": fpvi,
-            "fpvi_level": level,
-            "status_peringatan": status,
-            "harga_terakhir": round(a["latest_harga"], 0),
-            "proyeksi_harga": round(proyeksi_harga, 0),
-            "estimasi_dampak_persen": dampak_persen,
-            "insight": insight,
-        })
-
-    results.sort(key=lambda r: -r["fpvi_score"])
-
-    return {
-        "horizon_minggu": WEEKS_AHEAD,
-        "kurs_terakhir": round(kurs_terakhir, 2),
-        "kurs_trend_per_bulan": round(kurs_trend_per_bulan, 2),
-        "kurs_proyeksi": round(kurs_proyeksi, 2),
-        "komoditas": results,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Main: Gold Layer Pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-
-def create_gold_layer():
+def main():
     spark = SparkSession.builder \
-        .appName("GoldLayer-SembakoWatch") \
+        .appName("GoldLayer-AI-SembakoWatch") \
         .master("local[*]") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
         .config("spark.driver.host", "127.0.0.1") \
@@ -524,151 +386,101 @@ def create_gold_layer():
         .getOrCreate()
 
     spark.sparkContext.setLogLevel("WARN")
+    print("\n[GOLD] ══════════════════════════════════════════════════════")
+    print("[GOLD] MEMULAI PEMROSESAN ANALITIK & MACHINE LEARNING (GOLD)")
+    print("[GOLD] ══════════════════════════════════════════════════════")
 
-    # ── Baca Silver Layer ────────────────────────────────────────────────────
+    # 1. BACA DATA DARI SILVER LAYER
     df = spark.read.parquet(f"{HDFS_SILVER_PATH}/kurs_pangan")
+    df = df.withColumn("year", year(col("date"))).withColumn("month", month(col("date")))
 
-    df = df \
-        .withColumn("year",  year(col("date"))) \
-        .withColumn("month", month(col("date")))
+    # Hitung Dynamic Time-Lag sebelum agregasi bulanan
+    lag_map = compute_dynamic_time_lag(df)
 
-    # ── Agregasi Bulanan ─────────────────────────────────────────────────────
-    monthly_kurs = df \
-        .groupBy("year", "month") \
-        .agg(
-            spark_round(avg("rate"), 2).alias("avg_kurs"),
-            spark_round(avg("oil_price_usd"), 2).alias("avg_oil_usd")
-        ) \
-        .orderBy("year", "month")
+    # 2. AGREGASI BULANAN
+    monthly_kurs = df.groupBy("year", "month").agg(
+        spark_round(avg("rate"), 2).alias("avg_kurs"),
+        spark_round(avg("oil_price_usd"), 2).alias("avg_oil_usd")
+    ).orderBy("year", "month")
 
-    monthly_pangan = df \
-        .groupBy("year", "month", "komoditas") \
-        .agg(spark_round(avg("harga"), 0).alias("avg_harga")) \
-        .orderBy("year", "month", "komoditas")
+    monthly_pangan = df.groupBy("year", "month", "komoditas").agg(
+        spark_round(avg("harga"), 0).alias("avg_harga")
+    ).orderBy("year", "month", "komoditas")
 
-    # ── Join inflasi BPS (opsional) ──────────────────────────────────────────
-    try:
-        bps_df = spark.read.parquet(HDFS_BRONZE_BPS) \
-            .select(
-                col("year").cast("int").alias("year"),
-                col("month").cast("int").alias("month"),
-                col("inflasi_mtm_persen").cast("double").alias("inflasi_bps_persen")
-            )
-        monthly_kurs = monthly_kurs.join(bps_df, on=["year", "month"], how="left")
-        has_bps = True
-    except Exception as e:
-        print(f"[WARN] BPS bronze tidak tersedia, skip join inflasi: {e}")
-        has_bps = False
-
-    # ── Join kurs + pangan ───────────────────────────────────────────────────
     monthly_joined = monthly_kurs.join(monthly_pangan, on=["year", "month"], how="inner")
 
-    # ── Korelasi Pearson ─────────────────────────────────────────────────────
-    correlation_df = monthly_joined \
-        .groupBy("komoditas") \
-        .agg(
-            spark_round(spark_corr("avg_kurs", "avg_harga"), 4).alias("pearson_corr_kurs"),
-            spark_round(spark_corr("avg_oil_usd", "avg_harga"), 4).alias("pearson_corr_oil")
-        ) \
-        .orderBy("komoditas")
+    # Simpan tabel agregasi bulanan ke HDFS Gold Layer
+    monthly_joined.write.mode("overwrite").parquet(f"{GOLD_PATH}/monthly_macro_pangan")
 
-    # ── Simpan Parquet ke HDFS ───────────────────────────────────────────────
-    monthly_kurs.write.mode("overwrite").parquet(f"{HDFS_GOLD_PATH}/monthly_kurs")
-    monthly_pangan.write.mode("overwrite").parquet(f"{HDFS_GOLD_PATH}/monthly_pangan")
-    correlation_df.write.mode("overwrite").parquet(f"{HDFS_GOLD_PATH}/correlation")
+    # 3. KORELASI PEARSON (KURS & MINYAK)
+    corr_df = monthly_joined.groupBy("komoditas").agg(
+        spark_round(spark_corr("avg_kurs", "avg_harga"), 4).alias("pearson_corr_kurs"),
+        spark_round(spark_corr("avg_oil_usd", "avg_harga"), 4).alias("pearson_corr_oil")
+    ).orderBy("komoditas")
 
-    print("Gold Parquet tersimpan di HDFS (kurs+oil+inflasi BPS, pangan, korelasi)")
-
-    # ── Ekspor JSON ke lokal ─────────────────────────────────────────────────
+    # 4. EKSTRAKSI KE MEMORI UNTUK MODUL AI
     os.makedirs(LOCAL_GOLD_DIR, exist_ok=True)
 
-    kurs_rows = monthly_kurs.orderBy("year", "month").collect()
-    kurs_data = [
-        {
-            "year": r["year"],
-            "month": r["month"],
-            "avg_kurs": float(r["avg_kurs"]) if r["avg_kurs"] is not None else None,
-            "avg_oil_usd": float(r["avg_oil_usd"]) if r["avg_oil_usd"] is not None else None,
-            "inflasi_bps_persen": float(r["inflasi_bps_persen"]) if has_bps and r["inflasi_bps_persen"] is not None else None,
-        }
-        for r in kurs_rows
+    kurs_sorted = [
+        {"year": r["year"], "month": r["month"], "avg_kurs": r["avg_kurs"], "avg_oil_usd": r["avg_oil_usd"]}
+        for r in monthly_kurs.collect()
     ]
     with open(f"{LOCAL_GOLD_DIR}/monthly_kurs.json", "w", encoding="utf-8") as f:
-        json.dump(kurs_data, f, indent=2)
+        json.dump(kurs_sorted, f, indent=2)
 
-    pangan_rows = monthly_pangan.collect()
     pangan_by_kom = {}
-    for r in pangan_rows:
-        k = r["komoditas"]
-        pangan_by_kom.setdefault(k, []).append(
-            {"year": r["year"], "month": r["month"], "avg_harga": float(r["avg_harga"])}
-        )
+    for r in monthly_pangan.collect():
+        pangan_by_kom.setdefault(r["komoditas"], []).append({
+            "year": r["year"], "month": r["month"], "avg_harga": float(r["avg_harga"])
+        })
     with open(f"{LOCAL_GOLD_DIR}/monthly_pangan.json", "w", encoding="utf-8") as f:
-        json.dump(pangan_by_kom, f, indent=2, ensure_ascii=False)
+        json.dump(pangan_by_kom, f, indent=2)
 
-    corr_rows = correlation_df.collect()
     corr_data = [
         {
             "komoditas": r["komoditas"],
-            "pearson_corr": float(r["pearson_corr_kurs"]) if r["pearson_corr_kurs"] is not None else 0.0,
-            "pearson_corr_oil": float(r["pearson_corr_oil"]) if r["pearson_corr_oil"] is not None else None,
+            "pearson_corr_kurs": float(r["pearson_corr_kurs"] or 0.0),
+            "pearson_corr_oil": float(r["pearson_corr_oil"]) if r["pearson_corr_oil"] is not None else None
         }
-        for r in corr_rows
+        for r in corr_df.collect()
     ]
     with open(f"{LOCAL_GOLD_DIR}/correlation.json", "w", encoding="utf-8") as f:
-        json.dump(corr_data, f, indent=2, ensure_ascii=False)
+        json.dump(corr_data, f, indent=2)
 
-    print(f"Gold JSON diekspor ke {LOCAL_GOLD_DIR}/")
-    print(f"   - monthly_kurs.json   ({len(kurs_data)} baris)")
-    print(f"   - monthly_pangan.json ({len(pangan_rows)} baris)")
-    print(f"   - correlation.json    ({len(corr_data)} komoditas)")
+    # 5. JALANKAN 4 MODUL AI & EXPORT JSON
+    forecast_data = run_multivariate_forecasting(monthly_joined, kurs_sorted, pangan_by_kom)
+    with open(f"{LOCAL_GOLD_DIR}/forecast.json", "w", encoding="utf-8") as f:
+        json.dump(forecast_data, f, indent=2)
 
-    # ── Existing: FPVI Analytics ─────────────────────────────────────────────
-    analytics = compute_analytics(kurs_data, pangan_by_kom, corr_data)
+    anomaly_data = run_residual_anomaly_detection(kurs_sorted, pangan_by_kom)
+    with open(f"{LOCAL_GOLD_DIR}/anomaly.json", "w", encoding="utf-8") as f:
+        json.dump(anomaly_data, f, indent=2)
+
+    fpvi_data = compute_fpvi_and_lag(pangan_by_kom, corr_data, lag_map)
     with open(f"{LOCAL_GOLD_DIR}/analytics.json", "w", encoding="utf-8") as f:
-        json.dump(analytics, f, indent=2, ensure_ascii=False)
+        json.dump(fpvi_data, f, indent=2)
 
-    if "error" in analytics:
-        print(f"[WARN] Analytics: {analytics['error']}")
-    else:
-        print(f"   - analytics.json      ({len(analytics['komoditas'])} komoditas)")
+    het_data = run_het_warning(pangan_by_kom, forecast_data)
+    with open(f"{LOCAL_GOLD_DIR}/het_warning.json", "w", encoding="utf-8") as f:
+        json.dump(het_data, f, indent=2)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  NEW: Machine Learning Features
-    # ══════════════════════════════════════════════════════════════════════════
-
-    # ── ML 1: Forecasting ────────────────────────────────────────────────────
+    # Simpan ringkasan FPVI & HET ke HDFS Gold Parquet untuk konsumsi downstream
     try:
-        forecast_data = run_ml_forecasting(spark, monthly_joined, kurs_data, pangan_by_kom)
-        with open(f"{LOCAL_GOLD_DIR}/forecast.json", "w", encoding="utf-8") as f:
-            json.dump(forecast_data, f, indent=2, ensure_ascii=False)
-        print(f"   - forecast.json       ({len(forecast_data['forecasts'])} model)")
+        if fpvi_data.get("komoditas"):
+            spark.createDataFrame(fpvi_data["komoditas"]).write.mode("overwrite").parquet(f"{GOLD_PATH}/fpvi_analytics")
+        if het_data.get("warnings"):
+            # Ganti None dengan 0 (artinya 0 minggu / tidak jebol) agar PySpark tahu tipenya adalah Integer
+            clean_warnings = [
+                {**w, "estimasi_minggu_jebol": w["estimasi_minggu_jebol"] if w["estimasi_minggu_jebol"] is not None else 0}
+                for w in het_data["warnings"]
+            ]
+            spark.createDataFrame(clean_warnings).write.mode("overwrite").parquet(f"{GOLD_PATH}/het_warnings")
     except Exception as e:
-        print(f"[ERROR] ML Forecasting gagal: {e}")
-        forecast_data = {"model_info": {"status": "ERROR"}, "forecasts": []}
+        print(f"[GOLD] Info: Arsip Parquet dilewati ({e})")
 
-    # ── ML 2: Anomaly Detection ──────────────────────────────────────────────
-    try:
-        anomaly_data = run_anomaly_detection(kurs_data, pangan_by_kom, corr_data)
-        with open(f"{LOCAL_GOLD_DIR}/anomaly.json", "w", encoding="utf-8") as f:
-            json.dump(anomaly_data, f, indent=2, ensure_ascii=False)
-        print(f"   - anomaly.json        ({anomaly_data['summary']['total_anomalies']} anomali)")
-    except Exception as e:
-        print(f"[ERROR] Anomaly Detection gagal: {e}")
-        anomaly_data = {"anomalies": [], "summary": {"total_anomalies": 0}}
-
-    # ── ML 3: HET Early Warning ──────────────────────────────────────────────
-    try:
-        het_data = run_het_warning(pangan_by_kom, forecast_data)
-        with open(f"{LOCAL_GOLD_DIR}/het_warning.json", "w", encoding="utf-8") as f:
-            json.dump(het_data, f, indent=2, ensure_ascii=False)
-        print(f"   - het_warning.json    ({len(het_data['warnings'])} komoditas)")
-    except Exception as e:
-        print(f"[ERROR] HET Warning gagal: {e}")
-
-    print("\n✅ Gold Layer + ML Pipeline selesai!")
+    print(f"\n✅ [GOLD] Sukses! Seluruh analitik AI diekspor ke: {LOCAL_GOLD_DIR}/")
     spark.stop()
 
 
 if __name__ == "__main__":
-    create_gold_layer()
+    main()

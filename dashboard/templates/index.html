@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SembakoWatch — Big Data & AI Early Warning Dashboard</title>
+  <title>FoodPulse — Macro-to-Micro Food Security Intelligence</title>
   <meta name="description" content="Dashboard analitik Big Data & AI untuk pemantauan dampak kurs USD terhadap harga pangan Indonesia secara real-time." />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
@@ -16,8 +16,8 @@
     <div class="header-inner">
       <div class="brand">
         <div class="brand-text">
-          <h1>SembakoWatch</h1>
-          <span class="subtitle">Big Data &amp; AI-Driven Early Warning System</span>
+          <h1>FoodPulse</h1>
+          <span class="subtitle">Macro-to-Micro Food Security Intelligence &amp; Early Warning System</span>
         </div>
       </div>
 
@@ -36,6 +36,9 @@
   </header>
 
   <main class="dashboard-wrapper">
+
+    <!-- Speed Layer Alert Banner -->
+    <div id="liveAlertsContainer" class="live-alerts-wrapper" style="margin-top: 20px; margin-bottom: 24px;"></div>
 
     <!-- ═════════════════════════════════════════════════════════
          SECTION 1 — KEY METRICS
@@ -79,7 +82,7 @@
     <section class="live-data-grid" aria-label="Live data">
       <!-- Kurs Chart -->
       <div class="glass-card chart-container fade-in">
-        <div class="chart-title">Kurs USD-IDR (30 Hari Terakhir)</div>
+        <div class="chart-title">Tren Dual-Makro: Kurs USD-IDR &amp; Minyak Mentah Dunia (Brent)</div>
         <canvas id="chartKurs"></canvas>
       </div>
 
@@ -178,15 +181,37 @@
   </main>
 
   <!-- ═══════════════════════════════════════════════════════════
-       FOOTER
+       FOOTER & CLUSTER TELEMETRY
        ═══════════════════════════════════════════════════════════ -->
   <footer class="dashboard-footer">
-    <div class="footer-pipeline">
-      <span class="pipe-dot"></span>
-      Pipeline aktif — data streaming
+    <div class="telemetry-panel" id="telemetryPanel"
+      style="display: flex; justify-content: center; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; font-size: 0.8rem;">
+      <div id="telKafka" style="display: inline-flex; align-items: center; gap: 6px;">
+        <span class="pipe-dot" id="dotKafka"
+          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
+        <span>Kafka Broker: <strong id="valKafka">Memeriksa...</strong></span>
+      </div>
+      <span style="opacity: 0.25;">•</span>
+      <div id="telHdfs" style="display: inline-flex; align-items: center; gap: 6px;">
+        <span class="pipe-dot" id="dotHdfs"
+          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
+        <span>HDFS Lakehouse: <strong id="valHdfs">Memeriksa...</strong></span>
+      </div>
+      <span style="opacity: 0.25;">•</span>
+      <div id="telSpeed" style="display: inline-flex; align-items: center; gap: 6px;">
+        <span class="pipe-dot" id="dotSpeed"
+          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
+        <span>Speed Stream: <strong id="valSpeed">Memeriksa...</strong></span>
+      </div>
+      <span style="opacity: 0.25;">•</span>
+      <div id="telSpark" style="display: inline-flex; align-items: center; gap: 6px;">
+        <span class="pipe-dot" id="dotSpark"
+          style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);"></span>
+        <span>PySpark AI: <strong id="valSpark">Memeriksa...</strong></span>
+      </div>
     </div>
-    <div class="footer-sources">BI (Kurs) • Siskaperbapo (Pangan) • EIA (Minyak) • BPS (Inflasi)</div>
-    <div class="footer-tech">Kafka → HDFS → PySpark → Flask</div>
+    <div class="footer-sources">Bank Indonesia &amp; Live Spot (Kurs) • Badan Pangan Nasional (Pangan) • EIA (Minyak) • BPS (Inflasi)</div>
+    <div class="footer-tech">Arsitektur Lambda Enterprise: Kafka Ingestion → HDFS Lakehouse → PySpark ML → Flask Serving</div>
   </footer>
 
   <!-- Chart.js 4.x CDN -->

@@ -1,382 +1,321 @@
-# FP: Big Data Analytics - Kurs USD-IDR & Harga Pangan
+# FoodPulse: Real-Time Macro-to-Micro Food Security Intelligence & Early Warning Platform
 
-Project ini menganalisis korelasi antara kurs USD-IDR dan harga pangan menggunakan arsitektur Big Data modern.
-
-## Anggota Kelompok 7
-
-| NRP | Nama Lengkap |
-| :--- | :--- |
-| 5027241049 | Khumaidi Kharis Az-zacky |
-| 5027241069 | Prabaswara Febrian Winandika |
-| 5027241070 | Zahra Khaalishah |
-| 5027241088 | I Gede Bagus Saka Sinatrya |
-| 5027241107 | Jofanka Al-Kautsar Pangestu Abady |
-
-## Arsitektur
-
-```
-Producers → Kafka → Consumer → HDFS → Spark (Bronze/Silver/Gold) → Dashboard
-```
-
-### Komponen Utama
-
-#### 1. **Producers** (`producers/`)
-- `producer_kurs.py`: Fetch kurs USD-IDR dari BI Web Service (XML)
-- `producer_pangan.py`: Scraping harga pangan dari PIHPS/SISKAPERBAPO (HTML)
-- Keduanya mengirim data ke Kafka real-time
-
-#### 2. **Apache Kafka 3.9.0** (KRaft Mode)
-- **Container:** `kafka-broker`
-- **Port PLAINTEXT:** `9092` (akses dari Windows)
-- **Port Internal:** `29092` (antar container)
-- **Topics:**
-  - `kurs-usd-idr`: Streaming data kurs USD-IDR
-  - `harga-pangan`: Streaming data harga pangan
-- **Auto Topic Creation:** Enabled
-
-#### 3. **Consumer** (`consumers/`)
-- `consumer_to_hdfs.py`: 
-  - Baca data dari Kafka topics
-  - Parse JSON dan validasi
-  - Simpan ke HDFS bronze layer sebagai JSON
-  - Berjalan continuous (infinite loop)
-
-#### 4. **Apache Hadoop 3** (HDFS & YARN)
-- **NameNode** (`hadoop-namenode`): Port 9870 (Web UI), 8020 (RPC)
-- **DataNode** (`hadoop-datanode`): Port 9864 (Web UI), 9866 (Transfer)
-- **ResourceManager** (`hadoop-resourcemanager`): Port 8088 (Web UI)
-- **NodeManager** (`hadoop-nodemanager`): Port 8042 (Web UI)
-- **Medallion Architecture:** Bronze → Silver → Gold layers
-
-#### 5. **Spark Layers** (`spark/`)
-- `bronze_layer.py`: Load raw JSON dari HDFS, struktur tipe string
-- `silver_layer.py`: Cleaning, casting tipe, join kurs + harga
-- `gold_layer.py`: Analitik tingkat lanjut. Melakukan agregasi bulanan, analisis korelasi Pearson (termasuk dengan Harga Minyak Global), melatih model Machine Learning (Forecasting), Anomaly Detection (Z-Score), HET Early Warning System, serta menghitung indeks kerentanan pangan (FPVI).
-
-#### 6. **Dashboard** (`dashboard/`)
-- Flask app di `http://localhost:5000`
-- Real-time visualization kurs dan harga pangan
-- API endpoints untuk data analytics
-
-#### 7. **Config** (`config/`)
-- `kafka_config.py`: Konfigurasi terpusat (Kafka, HDFS, paths)
-
-### Fitur Analitik & AI (Baru)
-Proyek ini mengintegrasikan pemrosesan Big Data dengan teknik analisis tingkat lanjut untuk menghasilkan *actionable insights*:
-1. **Machine Learning Forecasting:** Menggunakan PySpark `LinearRegression` untuk memprediksi harga pangan hingga 4 minggu ke depan. Disertai metrik validasi (RMSE dan R²) secara transparan.
-2. **Anomaly Detection (Z-Score):** Mendeteksi lonjakan harga yang tidak wajar di luar tren historis menggunakan analisis residual Z-Score, lengkap dengan estimasi potensi penyebab anomali.
-3. **HET Early Warning System:** Sistem peringatan dini otomatis yang memantau margin harga aktual terhadap Harga Eceran Tertinggi (HET) yang ditetapkan pemerintah. Memberikan status *Aman*, *Waspada*, atau *Kritis*.
-4. **Food Price Vulnerability Index (FPVI):** Indeks kerentanan harga pangan (skala 0-100) yang diciptakan khusus untuk proyek ini. Menilai seberapa rentan suatu komoditas terhadap guncangan kurs USD dan fluktuasi harga minyak global.
-5. **Pearson Correlation Analysis:** Analisis korelasi *real-time* yang mengungkap kekuatan hubungan linear antara Kurs USD/Minyak Global dengan pergerakan harga pangan domestik.
-
-## Cara Menjalankan
-
-### Prerequisites
-- **Python 3.11+** (tested dengan Python 3.13)
-- **Docker & Docker Compose** terinstall
-- **Apache Spark** (untuk Spark submit jobs)
-- **Java 11+** (untuk Spark & Hadoop)
+> **Author & Lead Architect:** Khumaidi Kharis Az-zacky  
+> **Architecture:** Distributed Lambda Architecture & Medallion Data Lakehouse  
+> **Core Stack:** Apache Kafka (KRaft) • Apache Hadoop (HDFS) • Apache Spark (PySpark ML) • Flask • Chart.js  
+> **Domain:** Macroeconomic Shock Propagation, Commodity Price Resilience, & Algorithmic Market Surveillance  
 
 ---
 
-### Langkah 1: Aktifkan Virtual Environment
+## 1. Executive Summary & Problem Space
 
-#### Windows (PowerShell):
-```powershell
-.\venv\Scripts\activate
-```
+Ketahanan pangan Indonesia memiliki ketergantungan asimetris terhadap dinamika ekonomi global (*macroeconomic shocks*). Pelemahan nilai tukar Rupiah terhadap Dolar AS (USD/IDR) secara langsung mengerek biaya impor komoditas pangan pokok (seperti Bawang Putih yang 95% kuotanya berasal dari impor) serta bahan baku industri pendukung (gandum dan bungkil kedelai untuk pakan ternak unggas). Di saat yang sama, fluktuasi harga energi dunia (*Brent Crude Oil*) langsung mentransmisikan tekanan pada biaya pengapalan logistik internasional dan ongkos distribusi antar pulau.
 
-#### Windows (CMD):
-```cmd
-.\venv\Scripts\activate.bat
-```
-
-#### macOS/Linux:
-```bash
-source venv/bin/activate
-```
-
-**Indikator sukses:** Muncul tanda `(venv)` di sebelah kiri prompt terminal Anda
+### Keterbatasan Sistem Pemantauan Pangan Konvensional:
+1. **Pasif dan Terlambat (*Post-Mortem Reporting*):** Portal harga pangan konvensional umumnya hanya berfungsi sebagai papan pencatat statistik kejadian masa lalu (*lagging indicator*). Ketika data kenaikan harga dipublikasikan, inflasi pangan sudah terlanjur terjadi dan mengikis daya beli masyarakat miskin.
+2. **Ketiadaan Hubungan Kausal Makro ke Mikro (*Macro-Blindness*):** Sistem yang ada memperlakukan harga pasar eceran seolah terisolasi dari faktor eksternal, tanpa memodelkan dinamika transmisi dari bursa valuta asing dan komoditas energi dunia.
+3. **Ketidakmampuan Mengidentifikasi Akar Masalah:** Ketika harga beras atau cabai melonjak tajam, pembuat kebijakan kesulitan membedakan:
+   * Apakah kenaikan tersebut **wajar (*cost-push inflation*)** akibat pelemahan kurs dan lonjakan BBM?
+   * Ataukah merupakan **anomali pasar non-makro** akibat penimbunan spekulan, disrupsi rantai pasok lokal, atau manipulasi kartel pangan?
 
 ---
 
-### Langkah 2: Instalasi Dependensi Proyek
+## 2. Gagasan & Arsitektur Solusi: FoodPulse
 
-Setelah virtual environment aktif, pasang semua library Python dari `requirements.txt`:
+**FoodPulse** dirancang sebagai platform intelijen pangan generasi baru yang mentransformasi pemantauan sembako menjadi **Sistem Deteksi Dini & Kewaspadaan Dini (*Early Warning System*)** berskala *enterprise*.
+
+Platform ini mengintegrasikan **Distributed Lambda Architecture** dengan **Medallion Data Lakehouse**:
+* **Batch Processing Layer (Deep AI Intelligence):** Menyerap dan memproses data historis 90+ hari melalui zona *Bronze $\rightarrow$ Silver $\rightarrow$ Gold* di Hadoop HDFS. Memanfaatkan **PySpark ML** untuk melatih model regresi multi-variat, mengkalkulasi korelasi transmisi *Dynamic Time-Lag* (0, 7, 14, 21 hari), merumuskan indeks kerentanan pangan (**FPVI 2.0**), serta mengisolasi anomali pasar menggunakan analisis **Residual Regression ($Z \ge 2.0$)**.
+* **Speed Processing Layer (Real-Time Ingestion & Alerting):** Mengalirkan pergerakan spot kurs valas 24/5 dan bursa minyak mentah secara live melalui **Apache Kafka**, disandingkan dengan harga pasar harian dari API resmi Badan Pangan Nasional (Bapanas). Sistem secara otomatis mengevaluasi kejutan pasar seketika (*in-flight*) untuk membunyikan alarm peringatan dini sebelum harga menembus batas Harga Eceran Tertinggi (HET).
+* **Serving & Control Layer (Interactive Command Center):** Menyajikan panel analitik eksekutif, simulator dampak transmisi, dan *telemetry monitor* kesehatan klaster Big Data secara interaktif di `http://localhost:8080`.
+
+---
+
+## 3. Keranjang Komoditas Pangan Strategis
+
+FoodPulse memantau keranjang 7 komoditas pangan pokok dengan metadata acuan regulasi nasional:
+
+| Komoditas | HET Resmi | Satuan | Bobot Impor ($W$) | Kategori Pasar | Karakteristik Transmisi Shock |
+| :--- | :---: | :---: | :---: | :--- | :--- |
+| **Beras Medium** | Rp 13.500 | kg | 15% | Pangan Pokok | Pangan pokok utama dengan elastisitas harga rendah; diproteksi cadangan Bulog (SPHP). |
+| **Bawang Putih Impor** | Rp 40.000 | kg | 95% | Impor Murni | Sensitivitas tertinggi terhadap pelemahan kurs USD/IDR dan regulasi kuota impor. |
+| **Daging Ayam Ras** | Rp 38.000 | kg | 40% | Semi-Impor | Transmisi bertahap melalui biaya impor bahan baku pakan ternak (jagung & bungkil kedelai). |
+| **Telur Ayam Ras** | Rp 29.500 | kg | 35% | Semi-Impor | Sensitif terhadap biaya pakan unggas komersial dan ongkos logistik distribusi. |
+| **Minyak Goreng Kemasan** | Rp 17.500 | liter | 20% | Terkendali HET | Terikat kebijakan DMO sawit; komponen kemasan dan transportasi terdampak minyak global. |
+| **Cabai Rawit Merah** | Rp 57.000 | kg | 5% | Volatile Lokal | Fluktuasi tinggi akibat cuaca & panen lokal; transmisi makro dominan pada ongkos angkut BBM. |
+| **Bawang Merah** | Rp 41.500 | kg | 5% | Volatile Lokal | Rentan siklus musiman sentra produksi lokal; biaya logistik distribusi dipengaruhi BBM. |
+
+---
+
+## 4. Arsitektur Terdistribusi & Alur Pipeline
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                     FOODPULSE PIPELINE FLOW                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+1. DATA INGESTION ENGINE
+   ├─► [STREAMING] producer_kurs.py    ──► Live Global Spot USD/IDR & Brent Oil ──► Kafka: kurs-stream
+   ├─► [STREAMING] producers_pangan.py ──► API Badan Pangan Nasional (Bapanas)  ──► Kafka: sembako-stream
+   └─► [BATCH HIST] fetch_*.py         ──► 90-Hari Historis BI, Bapanas, EIA, BPS ──► Direct to HDFS Bronze
+
+2. SPEED LAYER (Low-Latency Processing & Alerting)
+   └─► consumer_to_hdfs.py:
+       ├─► In-Memory Stream Cache      ──► dashboard/data/live_*.json (Sub-detik)
+       ├─► In-Flight Shock Evaluator   ──► Flash Volatility Alert & Live HET Breach Banner
+       └─► Micro-Batch Lakehouse Flush ──► HDFS /data/lakehouse/bronze/ (Interval 60s / 10 pesan)
+
+3. BATCH LAYER: MEDALLION LAKEHOUSE (Apache Spark 3.x Engine)
+   ├─► Bronze Layer (bronze_layer.py):
+   │   └─ Ingest raw JSON dari HDFS ──► Validasi skema data ──► Parquet Bronze terkompresi
+   │
+   ├─► Silver Layer (silver_layer.py):
+   │   └─ Data cleaning, forward-fill windowing (gap weekend), & join multi-dimensi waktu
+   │
+   └─► Gold Layer (gold_layer.py - AI & Advanced Analytics Engine):
+       ├─► PySpark ML Multi-Variate Linear Regression (Kurs + Minyak Dunia ──► Proyeksi 4 Minggu)
+       ├─► Dynamic Time-Lag Analysis (Evaluasi koefisien transmisi lag 0, 7, 14, 21 hari)
+       ├─► FPVI 2.0 (Food Price Vulnerability Index: Bobot Impor + Korelasi + Volatilitas)
+       ├─► Residual-Based Anomaly Detection (Z-Score Residual >= 2.0: Deteksi Spekulan vs Cost-Push)
+       └─► HET Runway Alert (Estimasi sisa minggu sebelum ambang regulasi terlampaui)
+
+4. SERVING & COMMAND CENTER (Flask Web Engine @ Port 8080)
+   ├─► Executive KPI Summary & Live In-Flight Warning Ticker
+   ├─► Dual-Axis Macro Trends Visualization (Kurs USD/IDR vs Brent Crude Oil)
+   ├─► 7 Strategic Commodities Live Prices & Volatilitas Deviasi
+   ├─► PySpark ML Forecasting & Model Evaluation Dashboard (R² Score & RMSE)
+   ├─► Interactive Expandable FPVI Table (Analisis Detail Transmisi Shock)
+   └─► Live Cluster & Pipeline Telemetry (Heartbeat Kafka, HDFS NameNode, Speed Lag, Spark Status)
+```
+
+---
+
+## 5. Struktur Direktori Proyek
+
+```text
+sembako_watch/
+├── config/
+│   └── kafka_config.py          # Konfigurasi sentral: Kafka Broker, HDFS URL, Topik, Metadata HET
+├── producers/
+│   ├── streaming_kafka/
+│   │   ├── producer_kurs.py     # Dual-Macro Streamer (Live Spot USD/IDR + Brent Crude)
+│   │   └── producers_pangan.py  # Real-time Streamer Panel Harga Bapanas
+│   └── batch_direct/
+│       ├── fetch_historical_bapanas.py  # Ingesti 90-hari historis pangan resmi ke HDFS Bronze
+│       ├── fetch_kurs_bi.py             # Ingesti 90-hari historis kurs transaksi BI ke HDFS Bronze
+│       ├── fetch_oil_eia.py             # Ingesti historis minyak mentah EIA ke HDFS Bronze
+│       └── fetch_macro_bps.py           # Ingesti historis inflasi bulanan BPS ke HDFS Bronze
+├── consumers/
+│   └── consumer_to_hdfs.py      # Dual-Routing Consumer: Speed Layer Cache & HDFS Bronze Lakehouse
+├── spark/
+│   ├── bronze_layer.py          # Ekstraksi Raw JSON ke Parquet Bronze Lakehouse
+│   ├── silver_layer.py          # Cleansing, Forward-Fill Windowing, & Multi-variate Time Join
+│   └── gold_layer.py            # PySpark ML Regressor, Dynamic Lag, FPVI 2.0, & Residual Anomaly
+├── dashboard/
+│   ├── app.py                   # Serving API Engine (Port 8080) + Telemetry & Alerting Evaluator
+│   ├── templates/
+│   │   └── index.html           # UI Command Center (Glassmorphism, Light/Dark, Telemetry Bar)
+│   ├── static/
+│   │   ├── css/style.css        # Responsive CSS Tokens, Custom Scroll, Status Animations
+│   │   └── js/dashboard.js      # Chart.js Dual-Axis, Live Alert Fetcher, Auto-Refresh Interval
+│   └── data/
+│       ├── live_kurs.json       # Speed Layer Cache Kurs & Minyak
+│       ├── live_pangan.json     # Speed Layer Cache Harga Pasar
+│       └── gold/                # Artefak Analitik PySpark (7 File JSON Hasil Olahan)
+├── docker-compose.yml           # Orkestrasi Multi-Kontainer: Kafka KRaft & Hadoop HDFS Cluster
+├── hadoop.env                   # Variabel Lingkungan Hadoop NameNode & DataNode
+├── requirements.txt             # Dependensi Pustaka Python
+└── README.md                    # Dokumentasi Komprehensif Sistem
+```
+
+---
+
+## 6. Fondasi Matematika & Algoritma AI
+
+### A. PySpark Multi-Variate Linear Regression
+Memproyeksikan harga pangan eceran ($\hat{Y}_t$) berdasarkan interaksi faktor nilai tukar rupiah ($X_{1,t}$) dan harga energi global ($X_{2,t}$):
+
+$$\hat{Y}_t = \beta_0 + \beta_1 \cdot \text{Kurs}_t + \beta_2 \cdot \text{Oil}_t$$
+
+Performa model dievaluasi secara transparan menggunakan **Root Mean Squared Error (RMSE)** dan **Koefisien Determinasi ($R^2$)**:
+$$R^2 = 1 - \frac{\sum (Y_i - \hat{Y}_i)^2}{\sum (Y_i - \bar{Y})^2}$$
+
+### B. Dynamic Time-Lag Analysis (Transmisi Shock)
+Pelemahan kurs tidak seketika mentransmisikan dampak ke harga pasar di hari yang sama. Sistem menguji jeda waktu transmisi $k \in \{0, 7, 14, 21\text{ hari}\}$:
+
+$$r_k = \text{Corr}(Y_t, X_{t-k})$$
+
+Jeda waktu dengan nilai $|r_k|$ terbesar ditetapkan sebagai **Puncak Transmisi Shock** komoditas tersebut (misal: Bawang Putih Impor memiliki transmisi puncak pada lag 21 hari karena siklus kontrak impor, karantina, dan distribusi kontainer).
+
+### C. Food Price Vulnerability Index (FPVI 2.0)
+Indeks komposit berskala 0–100 untuk mengukur kerentanan komoditas terhadap guncangan eksternal secara terukur:
+
+$$\text{FPVI} = \left( 0.40 \times W_{\text{impor}} \right) + \left( 0.35 \times \frac{|r_{\text{kurs}}| + |r_{\text{oil}}|}{2} \times 100 \right) + \left( 0.25 \times V_{\text{norm}} \right)$$
+
+*Tingkat Kerentanan:* **Rendah** ($< 40$), **Sedang** ($40 - 70$), **Tinggi** ($> 70$).
+
+### D. Residual-Based Anomaly Detection ($Z \ge 2.0$)
+Membedakan kenaikan harga wajar (*cost-push*) dengan ulah penimbun/kartel menggunakan **Residual Analysis**:
+
+$$e_t = Y_t - \hat{Y}_t, \quad Z_t = \frac{e_t - \mu_e}{\sigma_e}$$
+
+* Jika $Z_t < 2.0$: Kenaikan harga selaras dengan tren kenaikan kurs dan BBM $\rightarrow$ Kebijakan: **Intervensi stabilisasi pasokan / subsidi logistik**.
+* Jika $Z_t \ge 2.0$: Lonjakan harga tidak dapat dijelaskan oleh faktor makro $\rightarrow$ Kebijakan: **Audit pasokan & inspeksi satgas pangan terhadap indikasi kartel/penimbunan**.
+
+---
+
+## 7. Panduan Menjalankan Sistem (Production Runbook)
+
+### Prasyarat:
+* **Sistem Operasi:** macOS / Linux / Windows WSL2
+* **Python Runtime:** Python 3.11+ dalam Virtual Environment
+* **Docker & Docker Compose:** Klaster Apache Kafka dan Apache Hadoop HDFS
+* **Java:** JDK 11+ (Runtime PySpark engine)
+
+---
+
+### Langkah 1: Persiapan Virtual Environment
+Buka terminal di root direktori proyek:
 
 ```bash
+# Inisialisasi dan aktivasi virtual environment
+python3 -m venv .venv
+source .venv/bin/activate       # macOS / Linux
+# .\venv\Scripts\activate       # Windows PowerShell
+
+# Instalasi seluruh pustaka dependensi
 pip install -r requirements.txt
 ```
 
-**Keterangan dependensi:**
-- `kafka-python-ng`: Producer & Consumer Kafka (compatible Python 3.13)
-- `hdfs`: WebHDFS client untuk Consumer
-- `pyspark`, `delta-spark`: Spark processing & Delta Lake
-- `Flask`: Web dashboard
-- `requests`, `beautifulsoup4`: Data sourcing (API & scraping)
-
 ---
 
-### Langkah 3: Membersihkan Container Lama (Jika Ada)
-
-Jika ada container dari proyek sebelumnya, bersihkan terlebih dahulu:
-
-```powershell
-docker rm -f kafka-broker hadoop-namenode hadoop-datanode hadoop-resourcemanager hadoop-nodemanager
-```
-
----
-
-### Langkah 4: Jalankan Infrastruktur Big Data (Docker)
-
-Pastikan file `docker-compose.yml` dan `hadoop.env` berada di direktori root proyek.
-
-Jalankan semua container dalam mode background (*detached*):
+### Langkah 2: Menjalankan Klaster Big Data (Docker)
+Inisialisasi kontainer Hadoop NameNode, DataNode, ResourceManager, NodeManager, dan Kafka KRaft:
 
 ```bash
 docker-compose up -d
 ```
 
-**PENTING:** Tunggu **20-30 detik** sebelum melanjutkan ke langkah berikutnya agar:
-- Kafka KRaft controller dan broker selesai booting
-- Hadoop NameNode selesai formatting
-- HDFS fully operational
+> ⏳ **Catatan:** Berikan jeda 20–30 detik agar NameNode selesai inisialisasi dan Kafka broker siap menerima koneksi pada port `9092`.
 
----
-
-### Langkah 5: Konfigurasi Izin Akses HDFS
-
-Atur permission root HDFS agar script Consumer Python dapat menulis data secara dinamis:
-
-```powershell
-docker exec -it hadoop-namenode hdfs dfs -chmod 777 /
-```
-
-Verifikasi permission berhasil diatur:
-```powershell
-docker exec -it hadoop-namenode hdfs dfs -ls -d /
-```
-
-**Output yang diharapkan:** `drwxrwxrwx ...` (755 atau 777)
-
----
-
-### Langkah 6: Verifikasi Infrastruktur
-
-Pastikan semua service sudah berjalan:
-
+Verifikasi seluruh kontainer berjalan normal:
 ```bash
 docker-compose ps
 ```
 
-**Output yang diharapkan:**
-| Service | Status |
-|---------|--------|
-| kafka-broker | running |
-| hadoop-namenode | running |
-| hadoop-datanode | running |
-| hadoop-resourcemanager | running |
-| hadoop-nodemanager | running |
-
-Akses Web UI untuk verifikasi:
-- **Kafka KRaft:** `http://localhost:9092` (port PLAINTEXT_HOST)
-- **NameNode Web UI:** `http://localhost:9870`
-- **ResourceManager Web UI:** `http://localhost:8088`
-
----
-
-### Langkah 7: Run Producers
-
-Buka terminal baru (tetap aktifkan venv), jalankan producer:
-
-**Terminal 1 - Producer Kurs USD-IDR:**
+Berikan izin penulisan pada direktori root HDFS:
 ```bash
-python -m producers.streaming_kafka.producer_kurs
-```
-
-**Terminal 2 - Producer Harga Pangan:**
-```bash
-python -m producers.streaming_kafka.producers_pangan
-```
-
-Verifikasi data masuk ke Kafka:
-```powershell
-docker exec -it kafka-broker kafka-console-consumer --bootstrap-server localhost:9092 --topic kurs-usd-idr --from-beginning --max-messages 5
+docker exec -it hadoop-namenode hdfs dfs -chmod -R 777 /
 ```
 
 ---
 
-### Langkah 8: Run Consumer to HDFS
-
-Terminal baru, jalankan consumer:
+### Langkah 3: Ingesti Data Historis (Lakehouse Bronze Seeding)
+Jalankan modul batch untuk mengisi HDFS Bronze dengan data historis riil:
 
 ```bash
-python -m consumers.consumer_to_hdfs
+python3 producers/batch_direct/fetch_kurs_bi.py
+python3 producers/batch_direct/fetch_historical_bapanas.py
+python3 producers/batch_direct/fetch_oil_eia.py
+python3 producers/batch_direct/fetch_macro_bps.py
 ```
 
-**Apa yang terjadi:**
-- Consumer membaca data dari Kafka topics
-- Menyimpan sebagai JSON ke HDFS bronze layer (`/data/lakehouse/bronze/`)
-- Berjalan continuous (tekan Ctrl+C untuk stop)
-
-Verifikasi data di HDFS:
-```powershell
-docker exec -it hadoop-namenode hdfs dfs -ls -R /data/lakehouse/bronze/
+Verifikasi struktur direktori di HDFS:
+```bash
+docker exec -it hadoop-namenode hdfs dfs -ls /data/lakehouse/bronze/
 ```
 
 ---
 
-### Langkah 9: Run Spark Processing Layers
-
-Jalankan Spark jobs untuk transformasi data. Pastikan Consumer sudah berjalan dan data tersimpan di HDFS.
-
-**Terminal baru:**
+### Langkah 4: Eksekusi Pipeline PySpark Medallion (Bronze $\rightarrow$ Silver $\rightarrow$ Gold)
+Jalankan layer transformasi data dan machine learning secara berurutan:
 
 ```bash
-# 1. Bronze Layer (Load raw data)
-spark-submit spark/bronze_layer.py
+# 1. Transformasi Raw JSON ke Parquet Bronze
+python3 spark/bronze_layer.py
 
-# 2. Silver Layer (Clean & transform)
-spark-submit spark/silver_layer.py
+# 2. Data Cleaning, Forward-Fill Windowing, & Join Multi-Dimensi
+python3 spark/silver_layer.py
 
-# 3. Gold Layer (Aggregate & analytics)
-spark-submit spark/gold_layer.py
+# 3. Model Regresi PySpark ML, Korelasi Lag, FPVI 2.0, & Deteksi Anomali
+python3 spark/gold_layer.py
 ```
 
-**Catatan:** Setiap layer perlu menunggu layer sebelumnya selesai.
-
-Monitor progress di Spark Web UI: `http://localhost:4040`
+*Output:* Tujuh artefak analitik JSON tersimpan di direktori `dashboard/data/gold/`.
 
 ---
 
-### Langkah 10: Start Dashboard
+### Langkah 5: Menjalankan Speed Layer Consumer & Kafka Streaming Producers
+Buka **3 terminal terpisah** (pastikan virtual environment aktif di setiap terminal):
 
-Terminal baru, jalankan Flask dashboard:
+* **Terminal 1 — Lakehouse Dual-Routing Consumer:**
+  ```bash
+  python3 consumers/consumer_to_hdfs.py
+  ```
+  *(Consumer mendengarkan Kafka, memperbarui cache lokal untuk Speed Layer, dan mem-flush micro-batch ke HDFS).*
 
-```bash
-cd dashboard
-python app.py
-```
+* **Terminal 2 — Dual-Macro Real-Time Producer (Kurs & Minyak Dunia):**
+  ```bash
+  python3 producers/streaming_kafka/producer_kurs.py
+  ```
+  *(Streaming live spot USD/IDR dan Brent crude oil setiap 30 detik).*
 
-**Output:**
-```
- * Running on http://127.0.0.1:5000
- * Debug mode: ON
-```
-
-Buka browser ke `http://localhost:5000` untuk visualisasi real-time data kurs dan harga pangan.
+* **Terminal 3 — Live Food Price Producer (Bapanas API):**
+  ```bash
+  python3 producers/streaming_kafka/producers_pangan.py
+  ```
+  *(Mengambil dan menyiarkan data harga pangan eceran Bapanas).*
 
 ---
 
-## Arsitektur Sistem (Data Pipeline)
+### Langkah 6: Menjalankan Command Center Serving Dashboard
+Buka **Terminal ke-4**, jalankan server web Flask:
 
-Berikut adalah alur data (*pipeline*) dari hulu ke hilir yang diterapkan dalam proyek Big Data ini. Kami mengimplementasikan **Medallion Data Lakehouse Architecture** untuk memastikan skalabilitas penyimpanan dan kualitas data analitik.
-
-<img width="1996" height="5523" alt="Siskaperbapo Data Ingestion-2026-06-20-081107" src="https://github.com/user-attachments/assets/bed6ca3f-9a8b-4eb4-b327-b4420863b2d5" />
-
-
-### Penjelasan Layer Arsitektur:
-
-*   **1. Data Sources:** Data diambil secara berkelanjutan dari dua sumber eksternal, yaitu API BI Web Service (untuk data nilai tukar/kurs USD-IDR) dan Web Scraping Siskaperbapo (untuk data harga komoditas pangan).
-*   **2. Ingestion Layer:** Menggunakan **Apache Kafka** sebagai *message broker* untuk menangkap dan mengelola antrean data *streaming* secara *real-time* sebelum diteruskan ke penyimpanan.
-*   **3. Storage Layer:** Seluruh data yang ditangkap oleh Kafka disimpan ke dalam sistem penyimpanan terdistribusi **HDFS** (*Hadoop Distributed File System*) yang bertindak sebagai fondasi *Data Lake* kami.
-*   **4. Medallion Processing (Apache Spark):** Ini adalah inti pemrosesan dan transformasi data yang terbagi menjadi tiga zona progresif:
-    *   **Bronze Layer:** Mengekstrak data berformat JSON mentah dari HDFS dan mengonversinya menjadi format **Parquet** agar lebih terkompresi dan efisien.
-    *   **Silver Layer:** Melakukan *data cleaning*, penyesuaian tipe data (*casting*), dan operasi *join* untuk menggabungkan dataset Kurs dengan dataset Harga Pangan berdasarkan tanggal.
-    *   **Gold Layer:** Menjalankan proses analitik tingkat lanjut, termasuk agregasi data bulanan, perhitungan **Korelasi Pearson**, dan pembentukan **Food Price Vulnerability Index (FPVI)**.
-*   **5. Serving Layer:** Hasil analitik matang dari Gold Layer divisualisasikan menggunakan aplikasi web **Flask Dashboard** sehingga *insight* dan indeks kerawanan dapat dipantau langsung oleh *end-user* melalui *browser*.
-
-## Data Flow
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        BIG DATA PIPELINE FLOW                            │
-└──────────────────────────────────────────────────────────────────────────┘
-
-1. SOURCING (Data Ingestion)
-   ├─→ Producer Kurs: BI Web Service (XML) → Kafka Topic (kurs-usd-idr)
-   └─→ Producer Pangan: Web Scraping (HTML) → Kafka Topic (harga-pangan)
-
-2. STREAMING (Kafka Message Broker)
-   ├─→ Topic: kurs-usd-idr (JSON format)
-   └─→ Topic: harga-pangan (JSON format)
-
-3. BRONZE LAYER (Raw Data Storage)
-   ├─→ Consumer reads Kafka → HDFS /data/lakehouse/bronze/kurs/ (JSON)
-   └─→ Consumer reads Kafka → HDFS /data/lakehouse/bronze/pangan/ (JSON)
-
-4. SILVER LAYER (Cleaned & Typed Data)
-   ├─→ bronze_layer.py: Load raw JSON
-   ├─→ silver_layer.py: 
-   │   ├─ Type casting (DATE, INT, FLOAT)
-   │   ├─ Data cleaning & validation
-   │   └─ → HDFS /data/lakehouse/silver/ (Parquet)
-
-5. GOLD LAYER (Analytics & Aggregation)
-   ├─→ gold_layer.py:
-   │   ├─ Join kurs + pangan + minyak global
-   │   ├─ ML Forecasting (PySpark Linear Regression)
-   │   ├─ Z-Score Anomaly Detection
-   │   ├─ HET Margin Analysis & FPVI Calculation
-   │   └─ → Local JSON (dashboard/data/gold/)
-
-6. VISUALIZATION & BI
-   ├─→ Dashboard (Flask):
-   │   ├─ GET /api/kurs: Latest kurs + 7-day history
-   │   ├─ GET /api/pangan: Latest harga pangan & prediksi ML
-   │   ├─ GET /api/correlation: Pearson correlation results
-   │   ├─ GET /api/anomali: Log deteksi anomali harga
-   │   └─ GET /api/fpvi: Skor Food Price Vulnerability Index
-   └─→ Web UI: Enterprise-grade dashboard di http://localhost:5000
+```bash
+python3 dashboard/app.py
 ```
 
-**Timeline Processing:**
-- **Real-time:** Producers → Kafka (continuous)
-- **Continuous:** Consumer → HDFS Bronze (24/7)
-- **Scheduled:** Spark layers (recommended: daily/hourly)
-- **On-demand:** Dashboard queries Gold layer
+Buka peramban (*browser*) Anda dan akses:
+👉 **`http://localhost:8080`**
 
+---
 
-## Konfigurasi
+### Langkah 7: Pengujian & Validasi Real-Time (Live Shock Injection Testing)
+Untuk memvalidasi bahwa pipeline streaming, Kafka event ingestion, dan deteksi dini dashboard benar-benar responsif dan reaktif (bukan tampilan statis):
 
-Konfigurasi terpusat disimpan di `config/kafka_config.py`:
+```bash
+# Skenario A: Uji Lonjakan Ekstrem Komoditas (Pelanggaran HET)
+# Kirim shock harga Cabai Rawit Merah ke Rp 85.000 (jauh di atas batas HET Rp 57.000)
+python3 scripts/test_shock.py --komoditas "Cabai Rawit Merah" --harga 85000
 
-### Kafka Configuration
-```python
-KAFKA_BROKER = ['localhost:9092']           # PLAINTEXT_HOST (akses dari Windows)
-KAFKA_API_VERSION = (3, 9, 0)              # KRaft Mode
-TOPIC_KURS = 'kurs-usd-idr'
-TOPIC_PANGAN = 'harga-pangan'
+# Skenario B: Uji Gejolak Makro Ekstrem (Kurs USD/IDR Shock)
+# Kirim lonjakan kurs ke Rp 19.500
+python3 scripts/test_shock.py --kurs 19500
+
+# Skenario C: Normalisasi Pasar (Reset ke Kondisi Normal)
+python3 scripts/test_shock.py --reset
 ```
 
-### HDFS Configuration
-```python
-HDFS_WEB_URL = 'http://localhost:9870'     # WebHDFS (Consumer)
-HDFS_RPC_URL = 'hdfs://localhost:8020'     # NameNode RPC (Spark)
-HDFS_USER = 'root'
-```
+> 🎯 **Hasil Seketika di Dashboard (`< 3 detik`):**
+> * Top Alert Banner seketika berubah merah menyala (`🚨 SPEED LAYER: LIVE HET BREACH`).
+> * Counter Pelanggaran HET bertambah otomatis.
+> * Kartu komoditas bersangkutan di seksi *Live Data* berkedip dengan badge delta lonjakan harga (`+49%`).
 
-### HDFS Paths (Medallion Architecture)
-```python
-BRONZE_KURS_PATH = '/data/lakehouse/bronze/kurs/'
-BRONZE_PANGAN_PATH = '/data/lakehouse/bronze/pangan/'
+---
 
-SILVER_KURS_PATH = '/data/lakehouse/silver/kurs/'
-SILVER_PANGAN_PATH = '/data/lakehouse/silver/pangan/'
+## 8. Technical Decision Records (TDR) & Justifikasi Rekayasa
 
-GOLD_ANALYTICS_PATH = '/data/lakehouse/gold/dampak_kurs_pangan/'
-```
+1. **Alokasi Port 8080 (Bukan Port 5000):**  
+   Pada macOS modern, port default `5000` telah dialokasikan oleh sistem operasi untuk layanan *AirPlay Receiver*, yang memicu konflik jaringan (*Port already in use*). FoodPulse dialokasikan ke port `8080` demi stabilitas operasional.
+2. **Kadensi Oversampling Nyquist (30 Detik):**  
+   Frontend me-refresh antarmuka melalui polling asinkron setiap 30 detik, selaras dengan interval streaming produser Kafka (30 detik). Hal ini menjamin pembacaan data selalu mutakhir (*data freshness lag < 30s*) tanpa menyebabkan pemborosan kuota atau blokir *rate-limiting* pada API eksternal.
+3. **Penanganan Gap Deret Waktu (*Forward-Fill Windowing*):**  
+   Bursa valas dan pasar komoditas energi tutup pada akhir pekan (Sabtu–Minggu), sedangkan pasar pangan tradisional beroperasi setiap hari. Pada `silver_layer.py`, diimplementasikan fungsi jendela PySpark `Window.orderBy("tanggal").rowsBetween(-7, 0)` untuk melakukan *forward-fill* pada nilai kurs dan minyak, mencegah timbulnya *null values* saat join tabel dilakukan.
+4. **Resiliensi Koneksi HDFS Docker Adapter:**  
+   Modul consumer mengintegrasikan adapter jaringan kustom (`_DockerHostRewriteAdapter`) untuk mengantisipasi masalah *internal container redirect* ketika WebHDFS DataNode mengembalikan IP internal kontainer yang tidak dapat dijangkau langsung dari host lokal.
 
-### Service Ports
-| Service | Port | URL |
-|---------|------|-----|
-| Kafka PLAINTEXT | 9092 | `localhost:9092` |
-| NameNode Web UI | 9870 | `http://localhost:9870` |
-| NameNode RPC | 8020 | `hdfs://localhost:8020` |
-| DataNode Web UI | 9864 | `http://localhost:9864` |
-| DataNode Transfer | 9866 | `localhost:9866` |
-| ResourceManager Web UI | 8088 | `http://localhost:8088` |
-| NodeManager Web UI | 8042 | `http://localhost:8042` |
-| Dashboard Flask | 5000 | `http://localhost:5000` |
+---
 
+## 9. Maintainer & Lisensi
 
+Platform ini dirancang, diarsiteki, dan dikembangkan secara independen oleh **Khumaidi Kharis Az-zacky** sebagai platform komputasi terdistribusi dan kecerdasan artifisial untuk ketahanan pangan nasional.

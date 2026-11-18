@@ -280,42 +280,6 @@ Buka peramban (*browser*) Anda dan akses:
 
 ---
 
-### Langkah 7: Pengujian & Validasi Real-Time (Live Shock Injection Testing)
-Untuk memvalidasi bahwa pipeline streaming, Kafka event ingestion, dan deteksi dini dashboard benar-benar responsif dan reaktif (bukan tampilan statis):
-
-```bash
-# Skenario A: Uji Lonjakan Ekstrem Komoditas (Pelanggaran HET)
-# Kirim shock harga Cabai Rawit Merah ke Rp 85.000 (jauh di atas batas HET Rp 57.000)
-python3 scripts/test_shock.py --komoditas "Cabai Rawit Merah" --harga 85000
-
-# Skenario B: Uji Gejolak Makro Ekstrem (Kurs USD/IDR Shock)
-# Kirim lonjakan kurs ke Rp 19.500
-python3 scripts/test_shock.py --kurs 19500
-
-# Skenario C: Normalisasi Pasar (Reset ke Kondisi Normal)
-python3 scripts/test_shock.py --reset
-```
-
-> 🎯 **Hasil Seketika di Dashboard (`< 3 detik`):**
-> * Top Alert Banner seketika berubah merah menyala (`🚨 SPEED LAYER: LIVE HET BREACH`).
-> * Counter Pelanggaran HET bertambah otomatis.
-> * Kartu komoditas bersangkutan di seksi *Live Data* berkedip dengan badge delta lonjakan harga (`+49%`).
-
----
-
-## 8. Technical Decision Records (TDR) & Justifikasi Rekayasa
-
-1. **Alokasi Port 8080 (Bukan Port 5000):**  
-   Pada macOS modern, port default `5000` telah dialokasikan oleh sistem operasi untuk layanan *AirPlay Receiver*, yang memicu konflik jaringan (*Port already in use*). FoodPulse dialokasikan ke port `8080` demi stabilitas operasional.
-2. **Kadensi Oversampling Nyquist (30 Detik):**  
-   Frontend me-refresh antarmuka melalui polling asinkron setiap 30 detik, selaras dengan interval streaming produser Kafka (30 detik). Hal ini menjamin pembacaan data selalu mutakhir (*data freshness lag < 30s*) tanpa menyebabkan pemborosan kuota atau blokir *rate-limiting* pada API eksternal.
-3. **Penanganan Gap Deret Waktu (*Forward-Fill Windowing*):**  
-   Bursa valas dan pasar komoditas energi tutup pada akhir pekan (Sabtu–Minggu), sedangkan pasar pangan tradisional beroperasi setiap hari. Pada `silver_layer.py`, diimplementasikan fungsi jendela PySpark `Window.orderBy("tanggal").rowsBetween(-7, 0)` untuk melakukan *forward-fill* pada nilai kurs dan minyak, mencegah timbulnya *null values* saat join tabel dilakukan.
-4. **Resiliensi Koneksi HDFS Docker Adapter:**  
-   Modul consumer mengintegrasikan adapter jaringan kustom (`_DockerHostRewriteAdapter`) untuk mengantisipasi masalah *internal container redirect* ketika WebHDFS DataNode mengembalikan IP internal kontainer yang tidak dapat dijangkau langsung dari host lokal.
-
----
-
-## 9. Maintainer & Lisensi
+## 8. Maintainer & Lisensi
 
 Platform ini dirancang, diarsiteki, dan dikembangkan secara independen oleh **Khumaidi Kharis Az-zacky** sebagai platform komputasi terdistribusi dan kecerdasan artifisial untuk ketahanan pangan nasional.
